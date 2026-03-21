@@ -1,0 +1,15 @@
+# Binary
+/horselens
+dist/
+
+# macOS
+.DS_Store
+
+# Go
+*.test
+*.out
+vendor/
+
+# Internal docs (not for public repo)
+docs/
+.claude
