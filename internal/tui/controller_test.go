@@ -8,6 +8,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/atterpac/dado/components"
 	"github.com/atterpac/dado/core"
 	"github.com/atterpac/dado/layout"
 
@@ -643,5 +644,33 @@ func TestStatusBarTypeRoundTrips(t *testing.T) {
 	}
 	if bar.GetSection(0).Text != "hello" {
 		t.Errorf("section text = %q", bar.GetSection(0).Text)
+	}
+}
+
+// Tab only goes somewhere when a form has more than one field. Advertising it
+// on the single-field New workspace dialog reads as a broken binding.
+func TestFormHintsMatchFieldCount(t *testing.T) {
+	has := func(hints []components.KeyHint, key string) bool {
+		for _, h := range hints {
+			if h.Key == key {
+				return true
+			}
+		}
+		return false
+	}
+
+	one := formHints(1)
+	if has(one, "Tab") {
+		t.Error("single-field form advertises Tab")
+	}
+	for _, k := range []string{"^U", "↵", "Esc"} {
+		if !has(one, k) {
+			t.Errorf("single-field form missing %s", k)
+		}
+	}
+
+	two := formHints(2)
+	if !has(two, "Tab") {
+		t.Error("multi-field form should advertise Tab")
 	}
 }

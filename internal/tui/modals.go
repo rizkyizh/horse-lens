@@ -10,6 +10,22 @@ import (
 // field describes one text input in a modal form.
 type field struct{ name, label, placeholder, initial string }
 
+// formHints describes the keys a form actually responds to. Tab only moves
+// somewhere when there is more than one field, and advertising it on a
+// single-field dialog reads as a broken binding.
+func formHints(fieldCount int) []components.KeyHint {
+	hints := make([]components.KeyHint, 0, 4)
+	if fieldCount > 1 {
+		hints = append(hints, components.KeyHint{Key: "Tab", Description: "next field"})
+	}
+	hints = append(hints,
+		components.KeyHint{Key: "^U", Description: "clear field"},
+		components.KeyHint{Key: "↵", Description: "save"},
+		components.KeyHint{Key: "Esc", Description: "cancel"},
+	)
+	return hints
+}
+
 // formModal shows a modal form and calls onSubmit with the trimmed values.
 func (u *ui) formModal(title string, fields []field, onSubmit func(map[string]string)) {
 	form := components.NewForm()
@@ -28,12 +44,7 @@ func (u *ui) formModal(title string, fields []field, onSubmit func(map[string]st
 	modal := components.NewModal(components.ModalConfig{
 		Title: title, Width: 68, MinHeight: 9, Backdrop: true,
 	})
-	modal.SetHints([]components.KeyHint{
-		{Key: "Tab", Description: "next field"},
-		{Key: "^U", Description: "clear field"},
-		{Key: "↵", Description: "save"},
-		{Key: "Esc", Description: "cancel"},
-	})
+	modal.SetHints(formHints(len(fields)))
 
 	form.SetOnSubmit(func(values map[string]any) {
 		out := make(map[string]string, len(values))
