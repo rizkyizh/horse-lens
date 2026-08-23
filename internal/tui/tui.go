@@ -18,10 +18,14 @@ type Result struct {
 }
 
 type ui struct {
-	app  *layout.App
-	ctl  *Controller
-	res  Result
-	list *components.Table
+	app *layout.App
+	ctl *Controller
+	res Result
+	// status is held with its concrete type. Asserting on app.TopBar() once
+	// silently failed — components and layout each define a StatusBar, and a
+	// comma-ok assertion to the wrong one just skips the update.
+	status *layout.StatusBar
+	list   *components.Table
 	// links is the detail table for the workspace named in detailFor.
 	links     *components.Table
 	detailFor string
@@ -34,9 +38,9 @@ func Run(st *store.Store) (Result, error) {
 	u := &ui{ctl: NewController(st)}
 	u.ctl.Refresh()
 
-	status := components.NewStatusBar()
+	u.status = layout.NewStatusBar()
 	u.app = layout.NewApp(layout.AppConfig{
-		TopBar:          status,
+		TopBar:          u.status,
 		BottomBar:       layout.NewMenu(),
 		BottomBarHeight: 1,
 	})
@@ -120,9 +124,12 @@ func (u *ui) showStatus() {
 		p := u.ctl.st.Paths()
 		msg = fmt.Sprintf("%d workspaces   root: %s", len(u.ctl.Rows()), p.Root)
 	}
-	if bar, ok := u.app.TopBar().(*layout.StatusBar); ok {
-		_ = failed
-		bar.SetSections([]layout.StatusSection{{Text: msg}})
+	if u.status != nil {
+		section := layout.StatusSection{Text: msg}
+		if failed {
+			section.Color = theme.Error()
+		}
+		u.status.SetSections([]layout.StatusSection{section})
 	}
 	u.app.UpdateMenuHints(u.hints())
 }

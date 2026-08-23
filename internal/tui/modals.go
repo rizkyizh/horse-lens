@@ -49,11 +49,23 @@ func (u *ui) formModal(title string, fields []field, onSubmit func(map[string]st
 	u.app.ShowModal(modal)
 }
 
+// confirmModal builds a yes/no modal.
+//
+// Modal.handleBaseInput invokes onSubmit on Enter but does not dismiss the
+// dialog; closing is the handler's job. Close runs before the action so the
+// dialog disappears even when the action then fails and reports an error.
+func confirmModal(title, message string, onYes func()) *components.Modal {
+	modal := components.NewConfirmModal(title, message)
+	modal.SetOnSubmit(func() {
+		modal.Close()
+		onYes()
+	})
+	return modal
+}
+
 // confirm shows a yes/no modal.
 func (u *ui) confirm(title, message string, onYes func()) {
-	modal := components.NewConfirmModal(title, message)
-	modal.SetOnSubmit(func() { onYes() })
-	u.app.ShowModal(modal)
+	u.app.ShowModal(confirmModal(title, message, onYes))
 }
 
 // --- workspace actions ------------------------------------------------------

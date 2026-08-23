@@ -9,6 +9,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/layout"
 
 	"github.com/rizkyizh/horse-lens/internal/config"
 	"github.com/rizkyizh/horse-lens/internal/store"
@@ -579,5 +580,68 @@ func TestForeignRowIsNotALink(t *testing.T) {
 	u.links.SelectRow(1) // NOTES.md
 	if _, ok := u.selectedLink(); ok {
 		t.Error("an unmanaged entry was reported as a link")
+	}
+}
+
+// Enter invokes the modal's submit handler but does not dismiss the dialog;
+// the handler has to close it. Without that the confirmation stayed on screen
+// after confirming.
+func TestConfirmModalClosesOnEnter(t *testing.T) {
+	var order []string
+	m := confirmModal("Delete workspace", "Delete \"x\"?", func() {
+		order = append(order, "action")
+	})
+	m.SetOnClose(func() { order = append(order, "close") })
+
+	if !m.HandleKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)) {
+		t.Fatal("Enter was not handled")
+	}
+	if len(order) != 2 || order[0] != "close" || order[1] != "action" {
+		t.Fatalf("order = %v, want [close action]", order)
+	}
+}
+
+// Esc must dismiss without running the action.
+func TestConfirmModalCancels(t *testing.T) {
+	var ran []string
+	m := confirmModal("Delete workspace", "Delete \"x\"?", func() {
+		ran = append(ran, "action")
+	})
+	m.SetOnClose(func() { ran = append(ran, "close") })
+
+	m.HandleKey(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
+	for _, r := range ran {
+		if r == "action" {
+			t.Fatal("Esc ran the confirmed action")
+		}
+	}
+	if len(ran) == 0 {
+		t.Error("Esc did not dismiss the dialog")
+	}
+}
+
+// dado defines a StatusBar in both components and layout. The top bar used to
+// be created from one package and type-asserted to the other, so the comma-ok
+// assertion silently failed and no status or error ever reached the screen.
+// The ui now keeps a typed reference; this pins the type it must be.
+func TestStatusBarTypeRoundTrips(t *testing.T) {
+	bar := layout.NewStatusBar()
+	app := layout.NewApp(layout.AppConfig{TopBar: bar})
+
+	got, ok := app.TopBar().(*layout.StatusBar)
+	if !ok {
+		t.Fatalf("TopBar() is %T, not *layout.StatusBar", app.TopBar())
+	}
+	if got != bar {
+		t.Error("TopBar() returned a different status bar than was configured")
+	}
+
+	// The section type must match too, or nothing renders.
+	bar.SetSections([]layout.StatusSection{{Text: "hello"}})
+	if bar.SectionCount() != 1 {
+		t.Errorf("SectionCount = %d, want 1", bar.SectionCount())
+	}
+	if bar.GetSection(0).Text != "hello" {
+		t.Errorf("section text = %q", bar.GetSection(0).Text)
 	}
 }
