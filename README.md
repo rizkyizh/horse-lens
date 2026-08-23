@@ -19,7 +19,8 @@ HorseLens solves this by creating **symlink-based virtual workspaces** — a foc
 - Never destructive — only symlinks HorseLens created are ever removed; real files are reported and left alone
 - Configurable locations, globally or per workspace
 - TOML config file — version-control your workspace definitions
-- Interactive picker, plus a fully scriptable CLI with `--json`
+- Full-screen interface for every action, plus a fully scriptable CLI with `--json`
+- 20+ built-in themes, switchable at runtime
 - Single static binary, no runtime dependencies
 
 ## Installation
@@ -47,7 +48,7 @@ horselens enter auth-feature
 
 You are now in a directory containing only `backend/` and `auth/`. Run your agent there and it sees nothing else. Type `exit` to leave.
 
-Run `horselens` with no arguments for the interactive picker.
+Run `horselens` with no arguments for the full-screen interface, where every action above is also available.
 
 ## Commands
 
@@ -82,15 +83,35 @@ Most of the time you never type it: `add`, `rm`, `rename`, `enter` and the picke
 
 `horselens apply` with no name reconciles every workspace. `status` is the same calculation printed instead of performed, so `status` then `apply` is the safe habit.
 
-### Picker keys
+## Interface
+
+Running `horselens` with no arguments opens the full-screen interface, built with [dado](https://github.com/atterpac/dado). Everything the CLI does is reachable here.
+
+**Workspace list**
 
 | Key | Action |
 | --- | --- |
 | `↑` `↓` / `k` `j` | Move |
-| `↵` | Enter workspace |
-| `a` | Apply |
+| `↵` | Apply and enter the workspace |
+| `l` / `→` | Show the workspace's links |
+| `n` | New workspace |
+| `r` | Rename |
 | `d` | Delete (with confirmation) |
+| `a` / `A` | Apply selected / apply all |
+| `R` | Reload the config from disk |
+| `t` | Switch theme |
 | `q` | Quit |
+
+**Link view** (`l` from the list)
+
+| Key | Action |
+| --- | --- |
+| `a` | Add a project |
+| `d` | Remove a link |
+| `A` | Apply |
+| `Esc` / `h` / `←` | Back |
+
+Entering a workspace closes the interface first, then opens the shell, so you land in a normal terminal rather than one nested inside a UI.
 
 ## Entering a workspace
 

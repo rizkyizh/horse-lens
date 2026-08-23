@@ -3,10 +3,9 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 
-	"github.com/rizkyizh/horse-lens/internal/config"
 	"github.com/rizkyizh/horse-lens/internal/shell"
+	"github.com/rizkyizh/horse-lens/internal/store"
 	"github.com/rizkyizh/horse-lens/internal/workspace"
 )
 
@@ -29,46 +28,33 @@ func (a *app) cmdList(args []string) error {
 	if err := argsExactly(fs, 0, "list [--json]"); err != nil {
 		return err
 	}
-
-	paths, f, err := a.load()
+	st, err := a.store()
 	if err != nil {
 		return err
 	}
-	all, err := workspace.ResolveAll(f, paths.Root)
+	rows, err := st.Summaries()
 	if err != nil {
 		return err
-	}
-
-	if len(all) == 0 && !a.json {
-		fmt.Fprintf(a.out, "no workspaces yet\n\n  config: %s\n  root:   %s\n\ncreate one:  horselens new <name>\n",
-			paths.Config, paths.Root)
-		return nil
-	}
-
-	rows := make([]jsonWorkspace, 0, len(all))
-	for _, ws := range all {
-		p, err := workspace.BuildPlan(ws)
-		if err != nil {
-			return err
-		}
-		c := p.Counts()
-		row := jsonWorkspace{
-			Name: ws.Name, Dir: ws.Dir, Links: len(ws.Links),
-			Drift:   c[workspace.ActionCreate] + c[workspace.ActionRetarget] + c[workspace.ActionRemove],
-			Foreign: c[workspace.ActionForeign],
-		}
-		for _, act := range p.Actions {
-			if act.Dangling {
-				row.Dangling++
-			}
-		}
-		rows = append(rows, row)
 	}
 
 	if a.json {
-		return json.NewEncoder(a.out).Encode(rows)
+		out := make([]jsonWorkspace, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, jsonWorkspace{
+				Name: r.Name, Dir: r.Dir, Links: r.Links,
+				Drift: r.Drift, Dangling: r.Dangling, Foreign: r.Foreign,
+			})
+		}
+		return json.NewEncoder(a.out).Encode(out)
 	}
 
+	p := st.Paths()
+	if len(rows) == 0 {
+		fmt.Fprintf(a.out,
+			"no workspaces yet\n\n  config: %s\n  root:   %s\n\ncreate one:  horselens new <name>\n",
+			p.Config, p.Root)
+		return nil
+	}
 	for _, r := range rows {
 		notes := joinNonEmpty([]string{
 			ifPositive(r.Drift, plural(r.Drift, "change pending", "changes pending")),
@@ -80,7 +66,7 @@ func (a *app) cmdList(args []string) error {
 		}
 		fmt.Fprintf(a.out, "%-20s %-8s %s\n", r.Name, plural(r.Links, "link", "links"), notes)
 	}
-	fmt.Fprintf(a.out, "\nconfig: %s\nroot:   %s\n", paths.Config, paths.Root)
+	fmt.Fprintf(a.out, "\nconfig: %s\nroot:   %s\n", p.Config, p.Root)
 	return nil
 }
 
@@ -99,25 +85,14 @@ func (a *app) cmdStatus(args []string) error {
 	if err := argsAtMost(fs, 1, "status [name] [--json]"); err != nil {
 		return err
 	}
-
-	paths, f, err := a.load()
+	st, err := a.store()
 	if err != nil {
 		return err
 	}
-	targets, err := a.selectWorkspaces(f, paths.Root, fs.Arg(0))
+	plans, err := a.plansFor(st, fs.Arg(0))
 	if err != nil {
 		return err
 	}
-
-	var plans []workspace.Plan
-	for _, ws := range targets {
-		p, err := workspace.BuildPlan(ws)
-		if err != nil {
-			return err
-		}
-		plans = append(plans, p)
-	}
-
 	if a.json {
 		return json.NewEncoder(a.out).Encode(plansToJSON(plans))
 	}
@@ -128,6 +103,233 @@ func (a *app) cmdStatus(args []string) error {
 		a.printPlan(p)
 	}
 	return nil
+}
+
+func (a *app) cmdNew(args []string) error {
+	fs := a.newFlags("new")
+	if err := a.parse(fs, args); err != nil {
+		return err
+	}
+	if err := argsExactly(fs, 1, "new <name>"); err != nil {
+		return err
+	}
+	name := fs.Arg(0)
+
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	if err := st.Create(name); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "created %q\n\nadd a project:  horselens add %s <path>\n", name, name)
+	return nil
+}
+
+func (a *app) cmdAdd(args []string) error {
+	fs := a.newFlags("add")
+	if err := a.parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() < 2 || fs.NArg() > 3 {
+		return fmt.Errorf("usage: horselens add <name> <src> [alias]")
+	}
+	name, src, alias := fs.Arg(0), fs.Arg(1), fs.Arg(2)
+
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	resolvedAlias, abs, err := st.AddLink(name, src, alias)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "added %s -> %s\n", resolvedAlias, abs)
+	if !store.SourceExists(abs) {
+		fmt.Fprintf(a.out, "warning: %s does not exist yet\n", abs)
+	}
+	return a.applyAndReport(st, name)
+}
+
+func (a *app) cmdRm(args []string) error {
+	fs := a.newFlags("rm")
+	if err := a.parse(fs, args); err != nil {
+		return err
+	}
+	if err := argsExactly(fs, 2, "rm <name> <alias>"); err != nil {
+		return err
+	}
+	name, alias := fs.Arg(0), fs.Arg(1)
+
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	if err := st.RemoveLink(name, alias); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "removed %s from %s\n", alias, name)
+	return a.applyAndReport(st, name)
+}
+
+func (a *app) cmdRename(args []string) error {
+	fs := a.newFlags("rename")
+	if err := a.parse(fs, args); err != nil {
+		return err
+	}
+	if err := argsExactly(fs, 2, "rename <old> <new>"); err != nil {
+		return err
+	}
+	oldName, newName := fs.Arg(0), fs.Arg(1)
+
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	if err := st.Rename(oldName, newName); err != nil {
+		return err
+	}
+	if oldName == newName {
+		return nil
+	}
+	fmt.Fprintf(a.out, "renamed %q -> %q\n", oldName, newName)
+	return a.applyAndReport(st, newName)
+}
+
+func (a *app) cmdDelete(args []string) error {
+	fs := a.newFlags("delete", withForce(a))
+	if err := a.parse(fs, args); err != nil {
+		return err
+	}
+	if err := argsExactly(fs, 1, "delete <name> [--force]"); err != nil {
+		return err
+	}
+	name := fs.Arg(0)
+
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	if err := st.Delete(name, a.force); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "deleted %q\n", name)
+	return nil
+}
+
+func (a *app) cmdApply(args []string) error {
+	fs := a.newFlags("apply")
+	if err := a.parse(fs, args); err != nil {
+		return err
+	}
+	if err := argsAtMost(fs, 1, "apply [name]"); err != nil {
+		return err
+	}
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	if name := fs.Arg(0); name != "" {
+		return a.applyAndReport(st, name)
+	}
+	plans, err := st.ApplyAll()
+	for _, p := range plans {
+		a.reportPlan(p)
+	}
+	return err
+}
+
+func (a *app) cmdEnter(args []string) error {
+	fs := a.newFlags("enter")
+	if err := a.parse(fs, args); err != nil {
+		return err
+	}
+	if err := argsExactly(fs, 1, "enter <name>"); err != nil {
+		return err
+	}
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	name := fs.Arg(0)
+	if err := a.applyAndReport(st, name); err != nil {
+		return err
+	}
+	ws, err := st.Resolve(name)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "entering %s (exit to leave)\n", ws.Dir)
+	return shell.Enter(ws.Dir, ws.Name)
+}
+
+func (a *app) cmdShellInit(args []string) error {
+	fs := a.newFlags("shell-init")
+	if err := a.parse(fs, args); err != nil {
+		return err
+	}
+	if err := argsExactly(fs, 1, "shell-init <bash|zsh|fish>"); err != nil {
+		return err
+	}
+	src, err := shell.Init(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	fmt.Fprint(a.out, src)
+	return nil
+}
+
+// --- shared helpers ---------------------------------------------------------
+
+// store opens the shared service layer with the resolved overrides.
+func (a *app) store() (*store.Store, error) { return store.Open(a.over) }
+
+// plansFor builds plans for one workspace, or all of them when name is "".
+func (a *app) plansFor(st *store.Store, name string) ([]workspace.Plan, error) {
+	if name != "" {
+		p, err := st.Plan(name)
+		if err != nil {
+			return nil, err
+		}
+		return []workspace.Plan{p}, nil
+	}
+	all, err := st.Workspaces()
+	if err != nil {
+		return nil, err
+	}
+	plans := make([]workspace.Plan, 0, len(all))
+	for _, ws := range all {
+		p, err := workspace.BuildPlan(ws)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, p)
+	}
+	return plans, nil
+}
+
+// applyAndReport reconciles one workspace and prints what changed.
+func (a *app) applyAndReport(st *store.Store, name string) error {
+	p, err := st.Apply(name)
+	if err != nil {
+		return err
+	}
+	a.reportPlan(p)
+	return nil
+}
+
+func (a *app) reportPlan(p workspace.Plan) {
+	for _, act := range p.Actions {
+		switch act.Kind {
+		case workspace.ActionCreate, workspace.ActionRetarget, workspace.ActionRemove:
+			fmt.Fprintf(a.out, "  %s %s\n", act.Kind.Symbol(), act.Alias)
+		case workspace.ActionForeign:
+			fmt.Fprintf(a.out, "  %s %s (not a symlink — left alone)\n", act.Kind.Symbol(), act.Alias)
+		}
+		if act.Dangling && act.Kind != workspace.ActionRemove {
+			fmt.Fprintf(a.out, "    warning: %s does not exist\n", act.Target)
+		}
+	}
 }
 
 type jsonAction struct {
@@ -196,322 +398,14 @@ func (a *app) cmdPath(args []string) error {
 	if err := argsExactly(fs, 1, "path <name>"); err != nil {
 		return err
 	}
-	paths, f, err := a.load()
+	st, err := a.store()
 	if err != nil {
 		return err
 	}
-	ws, err := a.resolveOne(f, paths.Root, fs.Arg(0))
+	ws, err := st.Resolve(fs.Arg(0))
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(a.out, ws.Dir)
 	return nil
-}
-
-// --- mutating ---------------------------------------------------------------
-
-func (a *app) cmdNew(args []string) error {
-	fs := a.newFlags("new")
-	if err := a.parse(fs, args); err != nil {
-		return err
-	}
-	if err := argsExactly(fs, 1, "new <name>"); err != nil {
-		return err
-	}
-	name := fs.Arg(0)
-	if err := workspace.ValidateName(name); err != nil {
-		return err
-	}
-
-	paths, f, err := a.load()
-	if err != nil {
-		return err
-	}
-	if _, exists := f.Find(name); exists {
-		return fmt.Errorf("workspace %q already exists", name)
-	}
-	f.Workspaces = append(f.Workspaces, config.Workspace{Name: name})
-	if err := config.Save(paths.Config, f); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.out, "created %q\n\nadd a project:  horselens add %s <path>\n", name, name)
-	return nil
-}
-
-func (a *app) cmdAdd(args []string) error {
-	fs := a.newFlags("add")
-	if err := a.parse(fs, args); err != nil {
-		return err
-	}
-	if fs.NArg() < 2 || fs.NArg() > 3 {
-		return fmt.Errorf("usage: horselens add <name> <src> [alias]")
-	}
-	name, src := fs.Arg(0), fs.Arg(1)
-
-	abs, err := config.ExpandPath(src)
-	if err != nil {
-		return err
-	}
-	alias := fs.Arg(2)
-	if alias == "" {
-		alias = filepath.Base(abs)
-	}
-	if err := workspace.ValidateAlias(alias); err != nil {
-		return fmt.Errorf("%w\n(pass an explicit alias: horselens add %s %s <alias>)", err, name, src)
-	}
-
-	paths, f, err := a.load()
-	if err != nil {
-		return err
-	}
-	cw, ok := f.Find(name)
-	if !ok {
-		return fmt.Errorf("no workspace named %q (create it: horselens new %s)", name, name)
-	}
-	for _, l := range cw.Links {
-		if l.Alias == alias {
-			return fmt.Errorf("workspace %q already has an alias %q", name, alias)
-		}
-	}
-	cw.Links = append(cw.Links, config.Link{Src: src, Alias: alias})
-	if err := config.Save(paths.Config, f); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(a.out, "added %s -> %s\n", alias, abs)
-	if _, err := statPath(abs); err != nil {
-		fmt.Fprintf(a.out, "warning: %s does not exist yet\n", abs)
-	}
-	return a.applyNamed(paths, f, name)
-}
-
-func (a *app) cmdRm(args []string) error {
-	fs := a.newFlags("rm")
-	if err := a.parse(fs, args); err != nil {
-		return err
-	}
-	if err := argsExactly(fs, 2, "rm <name> <alias>"); err != nil {
-		return err
-	}
-	name, alias := fs.Arg(0), fs.Arg(1)
-
-	paths, f, err := a.load()
-	if err != nil {
-		return err
-	}
-	cw, ok := f.Find(name)
-	if !ok {
-		return fmt.Errorf("no workspace named %q", name)
-	}
-	found := false
-	for i, l := range cw.Links {
-		if l.Alias == alias {
-			cw.Links = append(cw.Links[:i], cw.Links[i+1:]...)
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("workspace %q has no alias %q", name, alias)
-	}
-	if err := config.Save(paths.Config, f); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.out, "removed %s from %s\n", alias, name)
-	return a.applyNamed(paths, f, name)
-}
-
-func (a *app) cmdRename(args []string) error {
-	fs := a.newFlags("rename")
-	if err := a.parse(fs, args); err != nil {
-		return err
-	}
-	if err := argsExactly(fs, 2, "rename <old> <new>"); err != nil {
-		return err
-	}
-	oldName, newName := fs.Arg(0), fs.Arg(1)
-	if err := workspace.ValidateName(newName); err != nil {
-		return err
-	}
-
-	paths, f, err := a.load()
-	if err != nil {
-		return err
-	}
-	cw, ok := f.Find(oldName)
-	if !ok {
-		return fmt.Errorf("no workspace named %q", oldName)
-	}
-	if oldName == newName {
-		return nil
-	}
-	if _, exists := f.Find(newName); exists {
-		return fmt.Errorf("workspace %q already exists", newName)
-	}
-
-	// Move the directory rather than rebuilding it, so anything the user keeps
-	// inside the workspace travels with it. Falling back to a rebuild would
-	// lose those files, so it is only allowed when there are none.
-	oldWS, err := workspace.Resolve(*cw, paths.Root)
-	if err != nil {
-		return err
-	}
-	renamed := *cw
-	renamed.Name = newName
-	newWS, err := workspace.Resolve(renamed, paths.Root)
-	if err != nil {
-		return err
-	}
-	if _, err := workspace.Move(oldWS.Dir, newWS.Dir); err != nil {
-		// A cross-filesystem rename cannot be done in place. Rebuilding is
-		// safe only when the directory holds nothing but symlinks; Destroy
-		// refuses otherwise and says which files are in the way.
-		if derr := workspace.Destroy(oldWS, false); derr != nil {
-			return fmt.Errorf("could not move %s to %s: %v\n%w\n(the rename was not applied)",
-				oldWS.Dir, newWS.Dir, err, derr)
-		}
-	}
-
-	cw.Name = newName
-	if err := config.Save(paths.Config, f); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.out, "renamed %q -> %q\n", oldName, newName)
-	return a.applyNamed(paths, f, newName)
-}
-
-func (a *app) cmdDelete(args []string) error {
-	fs := a.newFlags("delete", withForce(a))
-	if err := a.parse(fs, args); err != nil {
-		return err
-	}
-	if err := argsExactly(fs, 1, "delete <name> [--force]"); err != nil {
-		return err
-	}
-	name := fs.Arg(0)
-
-	paths, f, err := a.load()
-	if err != nil {
-		return err
-	}
-	ws, err := a.resolveOne(f, paths.Root, name)
-	if err != nil {
-		return err
-	}
-	if err := workspace.Destroy(ws, a.force); err != nil {
-		return err
-	}
-	f.Remove(name)
-	if err := config.Save(paths.Config, f); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.out, "deleted %q\n", name)
-	return nil
-}
-
-func (a *app) cmdApply(args []string) error {
-	fs := a.newFlags("apply")
-	if err := a.parse(fs, args); err != nil {
-		return err
-	}
-	if err := argsAtMost(fs, 1, "apply [name]"); err != nil {
-		return err
-	}
-	paths, f, err := a.load()
-	if err != nil {
-		return err
-	}
-	targets, err := a.selectWorkspaces(f, paths.Root, fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	for _, ws := range targets {
-		if err := a.applyOne(ws); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (a *app) cmdEnter(args []string) error {
-	fs := a.newFlags("enter")
-	if err := a.parse(fs, args); err != nil {
-		return err
-	}
-	if err := argsExactly(fs, 1, "enter <name>"); err != nil {
-		return err
-	}
-	paths, f, err := a.load()
-	if err != nil {
-		return err
-	}
-	ws, err := a.resolveOne(f, paths.Root, fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	if err := a.applyOne(ws); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.out, "entering %s (exit to leave)\n", ws.Dir)
-	return shell.Enter(ws.Dir, ws.Name)
-}
-
-func (a *app) cmdShellInit(args []string) error {
-	fs := a.newFlags("shell-init")
-	if err := a.parse(fs, args); err != nil {
-		return err
-	}
-	if err := argsExactly(fs, 1, "shell-init <bash|zsh|fish>"); err != nil {
-		return err
-	}
-	src, err := shell.Init(fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	fmt.Fprint(a.out, src)
-	return nil
-}
-
-// --- shared helpers ---------------------------------------------------------
-
-// selectWorkspaces returns one named workspace, or all of them when name is "".
-func (a *app) selectWorkspaces(f *config.File, root, name string) ([]workspace.Workspace, error) {
-	if name == "" {
-		return workspace.ResolveAll(f, root)
-	}
-	ws, err := a.resolveOne(f, root, name)
-	if err != nil {
-		return nil, err
-	}
-	return []workspace.Workspace{ws}, nil
-}
-
-func (a *app) applyOne(ws workspace.Workspace) error {
-	p, err := workspace.BuildPlan(ws)
-	if err != nil {
-		return err
-	}
-	if err := p.Apply(); err != nil {
-		return err
-	}
-	for _, act := range p.Actions {
-		switch act.Kind {
-		case workspace.ActionCreate, workspace.ActionRetarget, workspace.ActionRemove:
-			fmt.Fprintf(a.out, "  %s %s\n", act.Kind.Symbol(), act.Alias)
-		case workspace.ActionForeign:
-			fmt.Fprintf(a.out, "  %s %s (not a symlink — left alone)\n", act.Kind.Symbol(), act.Alias)
-		}
-		if act.Dangling && act.Kind != workspace.ActionRemove {
-			fmt.Fprintf(a.out, "    warning: %s does not exist\n", act.Target)
-		}
-	}
-	return nil
-}
-
-func (a *app) applyNamed(paths config.Paths, f *config.File, name string) error {
-	ws, err := a.resolveOne(f, paths.Root, name)
-	if err != nil {
-		return err
-	}
-	return a.applyOne(ws)
 }
