@@ -60,7 +60,7 @@ Run `horselens` with no arguments for the interactive picker.
 | `add <name> <src> [alias]` | Add a link; alias defaults to the source folder name |
 | `rm <name> <alias>` | Remove a link |
 | `rename <old> <new>` | Rename a workspace, moving its directory as-is |
-| `delete <name>` | Remove a workspace and its symlinks |
+| `delete <name>` | Remove a workspace and its symlinks; refuses if unmanaged files are present |
 | `apply [name]` | Reconcile symlinks with the config (all workspaces if omitted) |
 | `path <name>` | Print the workspace directory |
 | `enter <name>` | Apply, then open a subshell inside the workspace |
@@ -69,6 +69,18 @@ Run `horselens` with no arguments for the interactive picker.
 Flags, accepted in any position: `--config <path>`, `--root <path>`, `--json` (`list`, `status`), `--force` (`delete`).
 
 `add`, `rm` and `rename` apply automatically, so the directory is never out of date with the config.
+
+### When you need `apply`
+
+The config file is the source of truth; the workspace directory is only its shadow. `apply` makes the directory match the config — creating missing links, repointing moved ones, and pruning links you removed.
+
+Most of the time you never type it: `add`, `rm`, `rename`, `enter` and the picker all apply for you. Reach for it when the config changed behind their backs:
+
+- you edited `config.toml` in an editor
+- you cloned the config on another machine — commit it to your dotfiles, run `horselens apply`, and every workspace materialises
+- a project folder moved, so you fixed its `src`
+
+`horselens apply` with no name reconciles every workspace. `status` is the same calculation printed instead of performed, so `status` then `apply` is the safe habit.
 
 ### Picker keys
 
@@ -124,9 +136,18 @@ auth-feature
   ! NOTES.md        (not a symlink — left alone)
 ```
 
-**HorseLens only ever removes symlinks it manages.** Anything that is not a symlink is reported and skipped, and `delete` refuses to run while such files are present unless you pass `--force`. Your source folders are never touched — symlinks are removed, never followed.
+### What is never touched
 
-So a `.claude/` directory, scratch notes, or anything else you keep inside a workspace survives `apply` and `rm`, and travels with the workspace when you `rename` it. The only command that removes such files is `delete --force`.
+**HorseLens only ever removes symlinks it manages.** Anything that is not a symlink is reported as `!` and skipped. So a `.claude/` directory, scratch notes, or anything else you keep inside a workspace is safe:
+
+| Command | Your unmanaged files |
+| --- | --- |
+| `apply`, `rm`, `status`, `list` | untouched |
+| `rename` | move with the workspace |
+| `delete` | refuses to run, and says which files are in the way |
+| `delete --force` | **removed** — the only command that deletes them |
+
+Your source folders are never at risk either: symlinks are removed, never followed.
 
 ## Configuration
 
