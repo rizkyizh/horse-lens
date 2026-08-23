@@ -58,6 +58,7 @@ const (
 	actReload
 	actTheme
 	actAddLink
+	actEditLink
 	actRemoveLink
 )
 
@@ -105,6 +106,8 @@ func routeDetail(ev *tcell.EventKey) action {
 		return actQuit
 	case 'a':
 		return actAddLink
+	case 'e':
+		return actEditLink
 	case 'd':
 		return actRemoveLink
 	case 'A':
@@ -217,6 +220,8 @@ func (u *ui) perform(a action, ev *tcell.EventKey) *tcell.EventKey {
 
 	case actAddLink:
 		u.addLink()
+	case actEditLink:
+		u.editLink()
 	case actRemoveLink:
 		u.removeLink()
 	}

@@ -113,9 +113,12 @@ A workspace is just a name and a set of links, so there is no single edit screen
 | Key | Action |
 | --- | --- |
 | `a` | Add a project |
+| `e` | Edit the selected link's path or alias |
 | `d` | Remove a link |
 | `A` | Apply |
 | `Esc` / `h` / `←` | Back |
+
+In a form, `Tab` moves between fields, `^U` clears the current one, `↵` saves and `Esc` cancels. Entries the workspace holds that are not symlinks are listed too, marked `left alone`; editing or removing those is refused.
 
 Entering a workspace closes the interface first, then opens the shell, so you land in a normal terminal rather than one nested inside a UI.
 

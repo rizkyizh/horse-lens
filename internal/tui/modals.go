@@ -30,6 +30,7 @@ func (u *ui) formModal(title string, fields []field, onSubmit func(map[string]st
 	})
 	modal.SetHints([]components.KeyHint{
 		{Key: "Tab", Description: "next field"},
+		{Key: "^U", Description: "clear field"},
 		{Key: "↵", Description: "save"},
 		{Key: "Esc", Description: "cancel"},
 	})
@@ -110,17 +111,44 @@ func (u *ui) addLink() {
 		})
 }
 
+func (u *ui) editLink() {
+	link, ok := u.selectedLink()
+	if !ok {
+		u.notAManagedLink()
+		return
+	}
+	ws := u.detailFor
+	u.formModal("Edit project",
+		[]field{
+			{name: "src", label: "Source path", placeholder: "~/Developer/backend", initial: link.RawSrc},
+			{name: "alias", label: "Alias", placeholder: "defaults to folder name", initial: link.Alias},
+		},
+		func(v map[string]string) {
+			u.ctl.UpdateLink(ws, link.Alias, v["src"], v["alias"])
+			u.refreshDetail()
+			u.showStatus()
+		})
+}
+
 func (u *ui) removeLink() {
-	alias := u.selectedAlias()
-	if alias == "" {
+	link, ok := u.selectedLink()
+	if !ok {
+		u.notAManagedLink()
 		return
 	}
 	ws := u.detailFor
 	u.confirm("Remove link",
-		fmt.Sprintf("Remove %q from %s?\n\nOnly the symlink goes; the source folder stays.", alias, ws),
+		fmt.Sprintf("Remove %q from %s?\n\nOnly the symlink goes; the source folder stays.", link.Alias, ws),
 		func() {
-			u.ctl.RemoveLink(ws, alias)
+			u.ctl.RemoveLink(ws, link.Alias)
 			u.refreshDetail()
 			u.showStatus()
 		})
+}
+
+// notAManagedLink explains why nothing happened when the cursor sits on an
+// entry horselens does not manage.
+func (u *ui) notAManagedLink() {
+	u.ctl.ok("that entry is not managed by horselens — nothing to change")
+	u.showStatus()
 }

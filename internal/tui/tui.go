@@ -99,19 +99,7 @@ func (u *ui) selectedRow() int {
 	return u.list.SelectedRow()
 }
 
-func (u *ui) restoreRow(i int) {
-	n := u.list.GetDataRowCount()
-	if n == 0 {
-		return
-	}
-	if i >= n {
-		i = n - 1
-	}
-	if i < 0 {
-		i = 0
-	}
-	u.list.SelectRow(i)
-}
+func (u *ui) restoreRow(i int) { selectRow(u.list, i) }
 
 // selectedName is the workspace under the cursor on the list page.
 func (u *ui) selectedName() string {
@@ -142,8 +130,9 @@ func (u *ui) showStatus() {
 func (u *ui) hints() []components.KeyHint {
 	if u.detailFor != "" {
 		return []components.KeyHint{
-			{Key: "a", Description: "add link"},
-			{Key: "d", Description: "remove link"},
+			{Key: "a", Description: "add"},
+			{Key: "e", Description: "edit"},
+			{Key: "d", Description: "remove"},
 			{Key: "A", Description: "apply"},
 			{Key: "Esc", Description: "back"},
 		}
@@ -166,9 +155,7 @@ func (u *ui) openDetail(name string) {
 		return
 	}
 	u.detailFor = name
-	t := components.NewTable()
-	t.SetHeaders("ALIAS", "SOURCE", "STATE")
-	t.ConfigureEmpty("", "No links", "Press a to add a project")
+	t := newDetailTable()
 	u.links = t
 	u.refreshDetail()
 
@@ -184,6 +171,7 @@ func (u *ui) refreshDetail() {
 	if u.links == nil {
 		return
 	}
+	sel := u.links.SelectedRow()
 	u.links.ClearRows()
 	for _, l := range u.ctl.Links(u.detailFor) {
 		u.links.AddRow(l.Alias, l.Src, l.State)
@@ -191,15 +179,44 @@ func (u *ui) refreshDetail() {
 	for _, f := range u.ctl.Foreign(u.detailFor) {
 		u.links.AddRow(f, "(not managed by horselens)", "left alone")
 	}
+	selectRow(u.links, sel)
 }
 
-func (u *ui) selectedAlias() string {
+// newDetailTable builds the link table for one workspace.
+func newDetailTable() *components.Table {
+	t := components.NewTable()
+	t.SetHeaders("ALIAS", "SOURCE", "STATE")
+	t.ConfigureEmpty("", "No links", "Press a to add a project")
+	return t
+}
+
+// selectRow puts the cursor on a data row, clamped into range. A freshly
+// filled table leaves the cursor on the header, where SelectedRow reports -1
+// and every action on the selection silently does nothing.
+func selectRow(t *components.Table, i int) {
+	n := t.GetDataRowCount()
+	if n == 0 {
+		return
+	}
+	if i < 0 {
+		i = 0
+	}
+	if i >= n {
+		i = n - 1
+	}
+	t.SelectRow(i)
+}
+
+// selectedLink returns the link under the cursor. The detail table lists
+// unmanaged entries after the links, so a cursor parked on one of those is
+// reported rather than silently ignored.
+func (u *ui) selectedLink() (LinkRow, bool) {
 	links := u.ctl.Links(u.detailFor)
 	i := u.links.SelectedRow()
 	if i < 0 || i >= len(links) {
-		return ""
+		return LinkRow{}, false
 	}
-	return links[i].Alias
+	return links[i], true
 }
 
 func (u *ui) closeDetail() {

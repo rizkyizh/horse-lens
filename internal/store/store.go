@@ -267,3 +267,61 @@ func SourceExists(abs string) bool {
 	_, err := os.Stat(abs)
 	return err == nil
 }
+
+// Link returns one link of a workspace as configured, unresolved, so an edit
+// form can show the path the user actually typed rather than its expansion.
+func (s *Store) Link(name, alias string) (config.Link, bool) {
+	cw, ok := s.file.Find(name)
+	if !ok {
+		return config.Link{}, false
+	}
+	for _, l := range cw.Links {
+		if l.Alias == alias {
+			return l, true
+		}
+	}
+	return config.Link{}, false
+}
+
+// UpdateLink replaces one link in place. Renaming the alias leaves the old
+// symlink behind, which the following reconcile prunes.
+func (s *Store) UpdateLink(name, oldAlias, newSrc, newAlias string) (string, string, error) {
+	abs, err := config.ExpandPath(newSrc)
+	if err != nil {
+		return "", "", err
+	}
+	if newAlias == "" {
+		newAlias = filepath.Base(abs)
+	}
+	if err := workspace.ValidateAlias(newAlias); err != nil {
+		return "", "", err
+	}
+
+	cw, ok := s.file.Find(name)
+	if !ok {
+		return "", "", fmt.Errorf("no workspace named %q", name)
+	}
+	idx := -1
+	for i, l := range cw.Links {
+		if l.Alias == oldAlias {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return "", "", fmt.Errorf("workspace %q has no alias %q", name, oldAlias)
+	}
+	if newAlias != oldAlias {
+		for i, l := range cw.Links {
+			if i != idx && l.Alias == newAlias {
+				return "", "", fmt.Errorf("workspace %q already has an alias %q", name, newAlias)
+			}
+		}
+	}
+
+	cw.Links[idx] = config.Link{Src: newSrc, Alias: newAlias}
+	if err := s.save(); err != nil {
+		return "", "", err
+	}
+	return newAlias, abs, nil
+}

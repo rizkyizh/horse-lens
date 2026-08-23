@@ -443,3 +443,141 @@ func TestEditAliasOpensLinks(t *testing.T) {
 		}
 	}
 }
+
+func TestControllerUpdateLink(t *testing.T) {
+	c, root := newCtl(t)
+	oldSrc := srcDir(t, "old")
+	newSrc := srcDir(t, "new")
+	c.Create("w")
+	c.AddLink("w", oldSrc, "api")
+
+	// Repoint the source, keeping the alias.
+	if !c.UpdateLink("w", "api", newSrc, "api") {
+		t.Fatalf("UpdateLink: %s", mustMsg(c))
+	}
+	if got, _ := os.Readlink(filepath.Join(root, "w", "api")); got != newSrc {
+		t.Errorf("after repoint, target = %q, want %q", got, newSrc)
+	}
+
+	// Rename the alias: the old symlink must be pruned by the reconcile.
+	if !c.UpdateLink("w", "api", newSrc, "backend") {
+		t.Fatalf("UpdateLink rename: %s", mustMsg(c))
+	}
+	if _, err := os.Lstat(filepath.Join(root, "w", "api")); !os.IsNotExist(err) {
+		t.Error("old alias symlink survived the rename")
+	}
+	if got, _ := os.Readlink(filepath.Join(root, "w", "backend")); got != newSrc {
+		t.Errorf("renamed alias target = %q, want %q", got, newSrc)
+	}
+	if links := c.Links("w"); len(links) != 1 || links[0].Alias != "backend" {
+		t.Errorf("links = %+v", links)
+	}
+}
+
+func TestControllerUpdateLinkRejectsClash(t *testing.T) {
+	c, _ := newCtl(t)
+	a, b := srcDir(t, "a"), srcDir(t, "b")
+	c.Create("w")
+	c.AddLink("w", a, "one")
+	c.AddLink("w", b, "two")
+
+	if c.UpdateLink("w", "one", a, "two") {
+		t.Error("UpdateLink accepted an alias already in use")
+	}
+	if _, failed := c.Status(); !failed {
+		t.Error("clash not reported as a failure")
+	}
+	if links := c.Links("w"); len(links) != 2 {
+		t.Errorf("links changed despite the rejection: %+v", links)
+	}
+}
+
+// The edit form should show the path as configured, not its expansion.
+func TestLinksExposeRawSource(t *testing.T) {
+	c, _ := newCtl(t)
+	c.Create("w")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	c.AddLink("w", "~/some-project", "proj")
+
+	links := c.Links("w")
+	if len(links) != 1 {
+		t.Fatalf("links = %+v", links)
+	}
+	if links[0].RawSrc != "~/some-project" {
+		t.Errorf("RawSrc = %q, want the configured ~ form", links[0].RawSrc)
+	}
+	if links[0].Src != filepath.Join(home, "some-project") {
+		t.Errorf("Src = %q, want the expanded path", links[0].Src)
+	}
+}
+
+func TestDetailKeyBindingsIncludeEdit(t *testing.T) {
+	if got := routeDetail(runeKey('e')); got != actEditLink {
+		t.Errorf("routeDetail(e) = %v, want actEditLink", got)
+	}
+	// 'e' means different things per page: open links vs edit a link.
+	if got := routeList(runeKey('e')); got != actOpenLinks {
+		t.Errorf("routeList(e) = %v, want actOpenLinks", got)
+	}
+}
+
+// A freshly filled table leaves the cursor on the header row, where
+// SelectedRow reports -1 and every action on the selection quietly does
+// nothing. Filling must place the cursor on the first data row.
+func TestFilledTableSelectsFirstDataRow(t *testing.T) {
+	c, _ := newCtl(t)
+	src := srcDir(t, "api")
+	c.Create("w")
+	c.AddLink("w", src, "api")
+
+	u := &ui{ctl: c}
+	u.buildList()
+	u.fillList()
+	if got := u.list.SelectedRow(); got != 0 {
+		t.Errorf("list cursor = %d after fill, want 0", got)
+	}
+	if got := u.selectedName(); got != "w" {
+		t.Errorf("selectedName = %q, want w", got)
+	}
+
+	// The detail table is the one that regressed.
+	u.detailFor = "w"
+	u.links = newDetailTable()
+	u.refreshDetail()
+	if got := u.links.SelectedRow(); got != 0 {
+		t.Errorf("detail cursor = %d after fill, want 0", got)
+	}
+	link, ok := u.selectedLink()
+	if !ok || link.Alias != "api" {
+		t.Errorf("selectedLink = %+v, ok=%v, want api", link, ok)
+	}
+}
+
+// Unmanaged entries are listed after the links; the cursor parked on one must
+// not resolve to a link.
+func TestForeignRowIsNotALink(t *testing.T) {
+	c, root := newCtl(t)
+	src := srcDir(t, "api")
+	c.Create("w")
+	c.AddLink("w", src, "api")
+	if err := os.WriteFile(filepath.Join(root, "w", "NOTES.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c.Refresh()
+
+	u := &ui{ctl: c, detailFor: "w"}
+	u.links = newDetailTable()
+	u.refreshDetail()
+
+	u.links.SelectRow(0)
+	if link, ok := u.selectedLink(); !ok || link.Alias != "api" {
+		t.Errorf("row 0 = %+v ok=%v, want the api link", link, ok)
+	}
+	u.links.SelectRow(1) // NOTES.md
+	if _, ok := u.selectedLink(); ok {
+		t.Error("an unmanaged entry was reported as a link")
+	}
+}

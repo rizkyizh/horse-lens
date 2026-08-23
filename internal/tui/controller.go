@@ -14,11 +14,14 @@ import (
 	"github.com/rizkyizh/horse-lens/internal/workspace"
 )
 
-// LinkRow is one link of a workspace, with its reconciliation state.
+// LinkRow is one link of a workspace, with its reconciliation state. Src is
+// resolved for display; RawSrc is what the config holds, which is what an edit
+// form should show.
 type LinkRow struct {
-	Alias string
-	Src   string
-	State string
+	Alias  string
+	Src    string
+	RawSrc string
+	State  string
 }
 
 // Controller holds the screen state and performs every mutation through the
@@ -112,7 +115,11 @@ func (c *Controller) Links(name string) []LinkRow {
 		if src == "" {
 			src = a.Current
 		}
-		out = append(out, LinkRow{Alias: a.Alias, Src: src, State: state})
+		row := LinkRow{Alias: a.Alias, Src: src, RawSrc: src, State: state}
+		if l, ok := c.st.Link(name, a.Alias); ok {
+			row.RawSrc = l.Src
+		}
+		out = append(out, row)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Alias < out[j].Alias })
 	return out
@@ -213,6 +220,25 @@ func (c *Controller) AddLink(name, src, alias string) bool {
 		c.ok("added %s -> %s", resolved, abs)
 	} else {
 		c.ok("added %s -> %s (source does not exist yet)", resolved, abs)
+	}
+	c.Refresh()
+	return true
+}
+
+func (c *Controller) UpdateLink(name, oldAlias, src, alias string) bool {
+	resolved, abs, err := c.st.UpdateLink(name, oldAlias, src, alias)
+	if err != nil {
+		c.fail(err)
+		return false
+	}
+	if _, applyErr := c.st.Apply(name); applyErr != nil {
+		c.fail(applyErr)
+		return false
+	}
+	if store.SourceExists(abs) {
+		c.ok("updated %s -> %s", resolved, abs)
+	} else {
+		c.ok("updated %s -> %s (source does not exist yet)", resolved, abs)
 	}
 	c.Refresh()
 	return true
