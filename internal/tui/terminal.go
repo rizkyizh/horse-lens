@@ -6,9 +6,11 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/creack/pty"
-	"github.com/hinshun/vt10x"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/vt"
+	"github.com/creack/pty"
 )
 
 type ptyReadMsg struct {
@@ -21,9 +23,12 @@ type ptyErrorMsg struct {
 }
 
 const (
-	maxRawBuf       = 256 * 1024
-	scrollStep      = 5
-	maxScrollHistory = 500
+	scrollStep = 5
+
+	// scrollbackLines is how many lines the emulator retains above the visible
+	// screen. The emulator owns this buffer, so unlike the old replay-based
+	// scrollback it costs nothing per frame and can be generous.
+	scrollbackLines = 5000
 )
 
 type TerminalModel struct {
@@ -31,11 +36,10 @@ type TerminalModel struct {
 	width, height int
 	workspaceName string
 	ptmx          *os.File
-	term          vt10x.Terminal
+	term          *vt.Emulator
 	ready         bool
 	cols, rows    int
-	rawBuf        []byte // accumulated raw PTY bytes for scrollback
-	scrollOffset  int    // lines scrolled up from bottom; 0 = live
+	scrollOffset  int // lines scrolled up from the bottom; 0 = live
 }
 
 func NewTerminal() TerminalModel {
@@ -71,14 +75,15 @@ func (t *TerminalModel) Start(dir string) tea.Cmd {
 	}
 
 	t.ptmx = ptmx
-	t.term = vt10x.New(vt10x.WithSize(t.cols, t.rows))
+	t.term = vt.NewEmulator(t.cols, t.rows)
+	t.term.SetScrollbackSize(scrollbackLines)
 	t.ready = true
 	return t.readPty()
 }
 
 func (t TerminalModel) readPty() tea.Cmd {
-	ptmx := t.ptmx             // capture by value (safe across struct copies)
-	ws := t.workspaceName      // identify which terminal this read belongs to
+	ptmx := t.ptmx        // capture by value (safe across struct copies)
+	ws := t.workspaceName // identify which terminal this read belongs to
 	return func() tea.Msg {
 		buf := make([]byte, 4096)
 		n, err := ptmx.Read(buf)
@@ -95,26 +100,22 @@ func (t TerminalModel) Update(msg tea.Msg) (TerminalModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ptyReadMsg:
 		if t.term != nil {
+			before := t.term.ScrollbackLen()
 			t.term.Write(msg.data) //nolint:errcheck
-		}
-		// Accumulate raw bytes for scrollback; trim front if over limit
-		if len(t.rawBuf)+len(msg.data) > maxRawBuf {
-			keep := maxRawBuf - len(msg.data)
-			if keep < 0 {
-				keep = 0
+			// Every line pushed into scrollback shifts the window down by one.
+			// While the user is scrolled up, grow the offset by the same amount
+			// so the viewport stays anchored to the content they are reading.
+			if t.scrollOffset > 0 {
+				if grew := t.term.ScrollbackLen() - before; grew > 0 {
+					t.scrollOffset += grew
+					t.clampScroll()
+				}
 			}
-			t.rawBuf = t.rawBuf[len(t.rawBuf)-keep:]
 		}
-		t.rawBuf = append(t.rawBuf, msg.data...)
 		return t, t.readPty()
 
 	case ptyErrorMsg:
-		if t.ptmx != nil {
-			t.ptmx.Close()
-			t.ptmx = nil
-		}
-		t.ready = false
-		t.term = nil
+		t.Close()
 		return t, nil
 
 	case tea.KeyMsg:
@@ -145,6 +146,7 @@ func (t *TerminalModel) SetSize(w, h int) {
 	if t.ptmx != nil {
 		pty.Setsize(t.ptmx, &pty.Winsize{Rows: uint16(t.rows), Cols: uint16(t.cols)}) //nolint:errcheck
 	}
+	t.clampScroll()
 }
 
 func (t *TerminalModel) SetFocused(f bool) {
@@ -168,18 +170,34 @@ func (t *TerminalModel) Close() {
 		t.ptmx.Close()
 		t.ptmx = nil
 	}
+	if t.term != nil {
+		t.term.Close() //nolint:errcheck
+		t.term = nil
+	}
 	t.ready = false
-	t.term = nil
+	t.scrollOffset = 0
+}
+
+// maxScroll is how far back the emulator can currently scroll.
+func (t TerminalModel) maxScroll() int {
+	if t.term == nil {
+		return 0
+	}
+	return t.term.ScrollbackLen()
+}
+
+func (t *TerminalModel) clampScroll() {
+	if t.scrollOffset < 0 {
+		t.scrollOffset = 0
+	}
+	if m := t.maxScroll(); t.scrollOffset > m {
+		t.scrollOffset = m
+	}
 }
 
 func (t *TerminalModel) ScrollBy(delta int) {
 	t.scrollOffset += delta
-	if t.scrollOffset < 0 {
-		t.scrollOffset = 0
-	}
-	if t.scrollOffset > maxScrollHistory {
-		t.scrollOffset = maxScrollHistory
-	}
+	t.clampScroll()
 }
 
 func (t *TerminalModel) ScrollToBottom() { t.scrollOffset = 0 }
@@ -191,14 +209,11 @@ func (t TerminalModel) IsAltScreen() bool {
 	if t.term == nil {
 		return false
 	}
-	return t.term.Mode()&vt10x.ModeAltScreen != 0
+	return t.term.IsAltScreen()
 }
 
 func (t TerminalModel) View() string {
 	if t.ready && t.term != nil {
-		if t.IsScrolled() && !t.IsAltScreen() {
-			return t.renderScrolled()
-		}
 		return t.renderBorderedGrid()
 	}
 	// Idle view: use lipgloss with correct outer dimensions
@@ -209,29 +224,24 @@ func (t TerminalModel) View() string {
 	return borderStyle.Width(t.width).Height(t.height).Render(t.renderIdle())
 }
 
-// renderScrolled replays rawBuf into a tall virtual terminal and extracts
-// the scrolled window.
-func (t TerminalModel) renderScrolled() string {
-	replayRows := t.rows + maxScrollHistory
-	replay := vt10x.New(vt10x.WithSize(t.cols, replayRows))
-	replay.Write(t.rawBuf) //nolint:errcheck
-
-	curY := replay.Cursor().Y
-	startRow := curY - t.rows + 1 - t.scrollOffset
-	if startRow < 0 {
-		startRow = 0
+// cellAt maps a visible row to either the scrollback buffer or the live screen,
+// according to the current scroll offset. Scrollback is bypassed entirely in
+// alt-screen mode, where a full-screen program owns the grid.
+func (t TerminalModel) cellAt(x, y int) *uv.Cell {
+	if t.term.IsAltScreen() {
+		return t.term.CellAt(x, y)
 	}
-	return t.renderBorderedGridFrom(replay, startRow)
+	sbLen := t.term.ScrollbackLen()
+	row := sbLen - t.scrollOffset + y
+	if row < sbLen {
+		return t.term.ScrollbackCellAt(x, row)
+	}
+	return t.term.CellAt(x, row-sbLen)
 }
 
 // renderBorderedGrid draws the border manually and writes cell content directly,
 // bypassing lipgloss so it cannot clip, reflow, or miscount ANSI-heavy content.
 func (t TerminalModel) renderBorderedGrid() string {
-	return t.renderBorderedGridFrom(t.term, 0)
-}
-
-// renderBorderedGridFrom renders a bordered grid using term starting at startRow.
-func (t TerminalModel) renderBorderedGridFrom(term vt10x.Terminal, startRow int) string {
 	var borderSeq string
 	if t.focused {
 		borderSeq = "\x1b[38;2;0;255;136m" // colorBorderFocus #00FF88
@@ -241,13 +251,15 @@ func (t TerminalModel) renderBorderedGridFrom(term vt10x.Terminal, startRow int)
 	const rst = "\x1b[0m"
 
 	cols, rows := t.cols, t.rows
+	scrolled := t.scrollOffset > 0 && !t.IsAltScreen()
+
 	var sb strings.Builder
 	sb.Grow((cols + 32) * (rows + 2))
 
 	// Top border — show scroll indicator when scrolled
-	if t.scrollOffset > 0 {
+	if scrolled {
 		indicator := fmt.Sprintf(" ↑ -%d ", t.scrollOffset)
-		padding := cols - len(indicator)
+		padding := cols - lipgloss.Width(indicator)
 		if padding < 0 {
 			padding = 0
 		}
@@ -256,29 +268,42 @@ func (t TerminalModel) renderBorderedGridFrom(term vt10x.Terminal, startRow int)
 		sb.WriteString(borderSeq + "╭" + strings.Repeat("─", cols) + "╮" + rst + "\n")
 	}
 
-	// Track current SGR state to suppress redundant escape sequences.
-	var (
-		curFG, curBG   = vt10x.DefaultFG, vt10x.DefaultBG
-		curMode  int16 = 0
-		stateSet       = false
-	)
-
 	for y := 0; y < rows; y++ {
 		sb.WriteString(borderSeq + "│" + rst)
-		for x := 0; x < cols; x++ {
-			cell := term.Cell(x, startRow+y)
-			if stateSet && cell.FG == curFG && cell.BG == curBG && cell.Mode == curMode {
-				ch := cell.Char
-				if ch == 0 {
-					ch = ' '
-				}
-				sb.WriteRune(ch)
-			} else {
-				sb.WriteString(cellToANSI(cell)) // emits full SGR + char
-				curFG, curBG, curMode = cell.FG, cell.BG, cell.Mode
-				stateSet = true
+
+		// The border reset above leaves the SGR state at its default, so each
+		// row starts from a zero style and emits only the deltas between cells.
+		var prev uv.Style
+
+		for x := 0; x < cols; {
+			cell := t.cellAt(x, y)
+			if cell == nil {
+				sb.WriteString(" ")
+				x++
+				continue
 			}
+			if cell.Width == 0 {
+				// Continuation column of a wide grapheme; already emitted.
+				x++
+				continue
+			}
+			if x+cell.Width > cols {
+				// A wide grapheme would overflow the panel — pad the remainder.
+				sb.WriteString(rst + strings.Repeat(" ", cols-x))
+				break
+			}
+			if !cell.Style.Equal(&prev) {
+				sb.WriteString(cell.Style.Diff(&prev))
+				prev = cell.Style
+			}
+			if cell.Content == "" {
+				sb.WriteString(" ")
+			} else {
+				sb.WriteString(cell.Content)
+			}
+			x += cell.Width
 		}
+
 		sb.WriteString(rst + borderSeq + "│" + rst + "\n")
 	}
 
@@ -298,76 +323,6 @@ func (t TerminalModel) renderIdle() string {
 		sb.WriteString(styleDimItem.Render("Select a workspace and press [↵] to open terminal.") + "\n")
 	}
 	return sb.String()
-}
-
-// Attribute bit positions from vt10x state.go (unexported constants, raw values):
-//
-//	attrReverse   = 1 << 0
-//	attrUnderline = 1 << 1
-//	attrBold      = 1 << 2
-//	attrItalic    = 1 << 4
-const (
-	vtAttrReverse   int16 = 1 << 0
-	vtAttrUnderline int16 = 1 << 1
-	vtAttrBold      int16 = 1 << 2
-	vtAttrItalic    int16 = 1 << 4
-)
-
-func cellToANSI(g vt10x.Glyph) string {
-	var seq strings.Builder
-	seq.WriteString("\x1b[0")
-
-	if g.Mode&vtAttrBold != 0      { seq.WriteString(";1") }
-	if g.Mode&vtAttrUnderline != 0 { seq.WriteString(";4") }
-	if g.Mode&vtAttrReverse != 0   { seq.WriteString(";7") }
-	if g.Mode&vtAttrItalic != 0    { seq.WriteString(";3") }
-
-	if s := colorCode(g.FG, true); s != "" {
-		seq.WriteString(";")
-		seq.WriteString(s)
-	}
-	if s := colorCode(g.BG, false); s != "" {
-		seq.WriteString(";")
-		seq.WriteString(s)
-	}
-
-	seq.WriteString("m")
-
-	ch := g.Char
-	if ch == 0 {
-		ch = ' '
-	}
-	seq.WriteRune(ch)
-	return seq.String()
-}
-
-func colorCode(c vt10x.Color, fg bool) string {
-	if c == vt10x.DefaultFG || c == vt10x.DefaultBG || c == vt10x.DefaultCursor {
-		return ""
-	}
-	base := 30
-	if !fg {
-		base = 40
-	}
-	idx := uint32(c)
-	if idx < 8 {
-		return fmt.Sprintf("%d", base+int(idx))
-	}
-	if idx < 16 {
-		return fmt.Sprintf("%d", base+60+int(idx-8))
-	}
-	if idx < 256 {
-		if fg {
-			return fmt.Sprintf("38;5;%d", idx)
-		}
-		return fmt.Sprintf("48;5;%d", idx)
-	}
-	// true color packed as r<<16|g<<8|b
-	r, g, b := (idx>>16)&0xff, (idx>>8)&0xff, idx&0xff
-	if fg {
-		return fmt.Sprintf("38;2;%d;%d;%d", r, g, b)
-	}
-	return fmt.Sprintf("48;2;%d;%d;%d", r, g, b)
 }
 
 func keyToBytes(msg tea.KeyMsg) []byte {

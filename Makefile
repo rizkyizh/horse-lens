@@ -13,5 +13,8 @@ run:
 clean:
 	rm -f $(BINARY)
 
+test:
+	go test ./...
+
 lint:
 	go vet ./...
