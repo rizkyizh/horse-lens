@@ -25,17 +25,19 @@ HorseLens solves this by creating **symlink-based virtual workspaces** — a foc
 
 ## Installation
 
-```sh
-go install github.com/rizkyizh/horse-lens/cmd/horselens@latest
-```
-
-Or download a binary for your platform from the [Releases page](https://github.com/rizkyizh/horse-lens/releases):
+There are no tagged releases; install from source.
 
 ```sh
-# Example for macOS arm64
-curl -L https://github.com/rizkyizh/horse-lens/releases/latest/download/horselens-darwin-arm64.tar.gz | tar xz
-mv horselens /usr/local/bin/
+git clone https://github.com/rizkyizh/horse-lens.git
+cd horse-lens
+go install ./cmd/horselens
 ```
+
+To update later, `git pull && go install ./cmd/horselens`.
+
+`go install github.com/rizkyizh/horse-lens/cmd/horselens@latest` also works and
+resolves to the newest commit on `main`, though the module proxy can lag behind
+by a while.
 
 ## Quick Start
 
