@@ -255,3 +255,42 @@ func TestDuplicateNamesAndAliasesRejected(t *testing.T) {
 		t.Error("duplicate alias accepted")
 	}
 }
+
+// The whole point of rename-as-move: a workspace holding a .claude directory
+// must still be renameable, with the directory intact afterwards.
+func TestRenameKeepsUnmanagedFiles(t *testing.T) {
+	h := newHarness(t)
+	src := h.srcDir("api")
+	h.ok("new", "before")
+	h.ok("add", "before", src)
+
+	claude := filepath.Join(h.root, "before", ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(`{"a":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	notes := filepath.Join(h.root, "before", "NOTES.md")
+	if err := os.WriteFile(notes, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, out, errOut := h.run("rename", "before", "after"); code != 0 {
+		t.Fatalf("rename exited %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+
+	if _, err := os.Stat(filepath.Join(h.root, "before")); !os.IsNotExist(err) {
+		t.Error("old directory left behind")
+	}
+	b, err := os.ReadFile(filepath.Join(h.root, "after", ".claude", "settings.json"))
+	if err != nil || string(b) != `{"a":1}` {
+		t.Errorf(".claude did not survive the rename: %q %v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(h.root, "after", "NOTES.md")); err != nil || string(b) != "mine" {
+		t.Errorf("NOTES.md did not survive the rename: %q %v", b, err)
+	}
+	if got, err := os.Readlink(filepath.Join(h.root, "after", "api")); err != nil || got != src {
+		t.Errorf("symlink after rename = %q err %v, want %q", got, err, src)
+	}
+}

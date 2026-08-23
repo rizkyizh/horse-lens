@@ -59,7 +59,7 @@ Run `horselens` with no arguments for the interactive picker.
 | `new <name>` | Create an empty workspace |
 | `add <name> <src> [alias]` | Add a link; alias defaults to the source folder name |
 | `rm <name> <alias>` | Remove a link |
-| `rename <old> <new>` | Rename a workspace |
+| `rename <old> <new>` | Rename a workspace, moving its directory as-is |
 | `delete <name>` | Remove a workspace and its symlinks |
 | `apply [name]` | Reconcile symlinks with the config (all workspaces if omitted) |
 | `path <name>` | Print the workspace directory |
@@ -125,6 +125,8 @@ auth-feature
 ```
 
 **HorseLens only ever removes symlinks it manages.** Anything that is not a symlink is reported and skipped, and `delete` refuses to run while such files are present unless you pass `--force`. Your source folders are never touched — symlinks are removed, never followed.
+
+So a `.claude/` directory, scratch notes, or anything else you keep inside a workspace survives `apply` and `rm`, and travels with the workspace when you `rename` it. The only command that removes such files is `delete --force`.
 
 ## Configuration
 

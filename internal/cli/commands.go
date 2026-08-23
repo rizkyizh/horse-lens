@@ -349,14 +349,27 @@ func (a *app) cmdRename(args []string) error {
 		return fmt.Errorf("workspace %q already exists", newName)
 	}
 
-	// Tear the old directory down before renaming, so no orphan is left
-	// behind. Symlinks are cheap to recreate under the new name.
+	// Move the directory rather than rebuilding it, so anything the user keeps
+	// inside the workspace travels with it. Falling back to a rebuild would
+	// lose those files, so it is only allowed when there are none.
 	oldWS, err := workspace.Resolve(*cw, paths.Root)
 	if err != nil {
 		return err
 	}
-	if err := workspace.Destroy(oldWS, false); err != nil {
-		return fmt.Errorf("%w\n(the rename was not applied)", err)
+	renamed := *cw
+	renamed.Name = newName
+	newWS, err := workspace.Resolve(renamed, paths.Root)
+	if err != nil {
+		return err
+	}
+	if _, err := workspace.Move(oldWS.Dir, newWS.Dir); err != nil {
+		// A cross-filesystem rename cannot be done in place. Rebuilding is
+		// safe only when the directory holds nothing but symlinks; Destroy
+		// refuses otherwise and says which files are in the way.
+		if derr := workspace.Destroy(oldWS, false); derr != nil {
+			return fmt.Errorf("could not move %s to %s: %v\n%w\n(the rename was not applied)",
+				oldWS.Dir, newWS.Dir, err, derr)
+		}
 	}
 
 	cw.Name = newName

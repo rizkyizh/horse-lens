@@ -287,3 +287,76 @@ func TestApplyRefusesToRemoveNonSymlink(t *testing.T) {
 		t.Errorf("file was destroyed: %q %v", b, err)
 	}
 }
+
+// Renaming must carry the whole directory across, including files horselens
+// does not manage. Rebuilding it would silently lose them.
+func TestMovePreservesForeignFiles(t *testing.T) {
+	root := t.TempDir()
+	src := t.TempDir()
+	old := mustResolve(t, root, config.Workspace{
+		Name:  "before",
+		Links: []config.Link{{Src: src, Alias: "api"}},
+	})
+	p, _ := BuildPlan(old)
+	if err := p.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	// The kind of thing a user accumulates inside a workspace.
+	if err := os.MkdirAll(filepath.Join(old.Dir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(old.Dir, ".claude", "settings.json"), []byte(`{"a":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	newWS := mustResolve(t, root, config.Workspace{
+		Name:  "after",
+		Links: []config.Link{{Src: src, Alias: "api"}},
+	})
+	moved, err := Move(old.Dir, newWS.Dir)
+	if err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if !moved {
+		t.Error("Move reported nothing moved")
+	}
+	if _, err := os.Stat(old.Dir); !os.IsNotExist(err) {
+		t.Error("old directory survived the move")
+	}
+	b, err := os.ReadFile(filepath.Join(newWS.Dir, ".claude", "settings.json"))
+	if err != nil || string(b) != `{"a":1}` {
+		t.Errorf("foreign file did not travel: %q %v", b, err)
+	}
+	if got, _ := os.Readlink(filepath.Join(newWS.Dir, "api")); got != src {
+		t.Errorf("symlink after move = %q, want %q", got, src)
+	}
+}
+
+func TestMoveEdgeCases(t *testing.T) {
+	root := t.TempDir()
+
+	// Nothing materialised yet is not an error.
+	moved, err := Move(filepath.Join(root, "never-applied"), filepath.Join(root, "b"))
+	if err != nil || moved {
+		t.Errorf("Move of a missing dir = (%v, %v), want (false, nil)", moved, err)
+	}
+
+	// Same path is a no-op.
+	if moved, err := Move(root, root); err != nil || moved {
+		t.Errorf("Move to the same path = (%v, %v)", moved, err)
+	}
+
+	// Refuses to clobber an existing directory.
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	for _, d := range []string{a, b} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Move(a, b); err == nil {
+		t.Error("Move overwrote an existing directory")
+	}
+	if _, err := os.Stat(a); err != nil {
+		t.Error("source removed despite the refusal")
+	}
+}
