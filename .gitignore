@@ -13,3 +13,13 @@ vendor/
 # Internal docs (not for public repo)
 docs/
 .claude
+/target
+vendor/*/target
+preview.html
+preview.ans
+/docs/
+CLAUDE.md
+RELEASING.md
+.claude/
+.agents/skills/
+tests/
