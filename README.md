@@ -6,33 +6,29 @@
 
 > Instant Context Isolation for AI-Assisted Coding
 
-<!-- Screenshot/demo GIF placeholder -->
-
 ## The Problem
 
-When you run an AI coding agent (Claude CLI, Aider, etc.) from a parent folder that contains many projects, the agent reads too many irrelevant files. This wastes context, slows responses, and causes the agent to make changes in the wrong places.
+When you run an AI coding agent (Claude Code, Aider, etc.) from a parent folder that contains many projects, the agent reads too many irrelevant files. This wastes context, slows responses, and causes the agent to make changes in the wrong places.
 
-HorseLens solves this by creating **symlink-based virtual workspaces** — a focused directory that only contains the projects you want the agent to see.
+HorseLens solves this by creating **symlink-based virtual workspaces** — a focused directory containing only the projects you want the agent to see.
 
 ## Features
 
-- Manage multiple named workspaces, each with a curated set of project symlinks
-- Embedded terminal: open a shell directly inside a workspace with one keypress
-- Fast switching between workspaces without leaving the TUI
+- CRUD for named workspaces, each a curated set of project symlinks
+- Declarative reconcile: `apply` makes the directory match the config, pruning links you removed
+- Never destructive — only symlinks HorseLens created are ever removed; real files are reported and left alone
+- Configurable locations, globally or per workspace
 - TOML config file — version-control your workspace definitions
+- Interactive picker, plus a fully scriptable CLI with `--json`
 - Single static binary, no runtime dependencies
 
 ## Installation
-
-### go install (recommended)
 
 ```sh
 go install github.com/rizkyizh/horse-lens/cmd/horselens@latest
 ```
 
-### Download binary from Releases
-
-Download the latest binary for your platform from the [Releases page](https://github.com/rizkyizh/horse-lens/releases), then move it to a directory on your `PATH`:
+Or download a binary for your platform from the [Releases page](https://github.com/rizkyizh/horse-lens/releases):
 
 ```sh
 # Example for macOS arm64
@@ -42,89 +38,146 @@ mv horselens /usr/local/bin/
 
 ## Quick Start
 
-1. Create a config file at `~/.config/horselens/config.toml`:
-
-```toml
-[[profiles]]
-  name = "my-project"
-
-  [[profiles.links]]
-    src = "~/Developer/my-api"
-    alias = "api"
-
-  [[profiles.links]]
-    src = "~/Developer/my-frontend"
-    alias = "frontend"
+```sh
+horselens new auth-feature
+horselens add auth-feature ~/Developer/backend        # alias defaults to "backend"
+horselens add auth-feature ~/Developer/auth-lib auth  # or name it yourself
+horselens enter auth-feature
 ```
 
-2. Run HorseLens:
+You are now in a directory containing only `backend/` and `auth/`. Run your agent there and it sees nothing else. Type `exit` to leave.
+
+Run `horselens` with no arguments for the interactive picker.
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| `horselens` | Open the workspace picker |
+| `list` | List workspaces and their state |
+| `status [name]` | Show what `apply` would change, without changing it |
+| `new <name>` | Create an empty workspace |
+| `add <name> <src> [alias]` | Add a link; alias defaults to the source folder name |
+| `rm <name> <alias>` | Remove a link |
+| `rename <old> <new>` | Rename a workspace |
+| `delete <name>` | Remove a workspace and its symlinks |
+| `apply [name]` | Reconcile symlinks with the config (all workspaces if omitted) |
+| `path <name>` | Print the workspace directory |
+| `enter <name>` | Apply, then open a subshell inside the workspace |
+| `shell-init <shell>` | Print shell integration |
+
+Flags, accepted in any position: `--config <path>`, `--root <path>`, `--json` (`list`, `status`), `--force` (`delete`).
+
+`add`, `rm` and `rename` apply automatically, so the directory is never out of date with the config.
+
+### Picker keys
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` / `k` `j` | Move |
+| `↵` | Enter workspace |
+| `a` | Apply |
+| `d` | Delete (with confirmation) |
+| `q` | Quit |
+
+## Entering a workspace
+
+A child process cannot change its parent shell's working directory, so there are two routes.
+
+**Subshell** — works everywhere, no setup:
 
 ```sh
-horselens
+horselens enter auth-feature   # exit to come back
 ```
 
-3. Select a workspace and press `↵` to open a terminal inside it. Your AI agent now only sees `api/` and `frontend/`.
+**Shell function** — a real `cd`, no nesting. Add to your shell rc:
 
-## Keybindings
+```sh
+eval "$(horselens shell-init zsh)"   # bash, zsh, sh
+```
 
-| Key             | Action                                |
-| --------------- | ------------------------------------- |
-| `n`             | New workspace                         |
-| `e`             | Edit workspace                        |
-| `d`             | Delete workspace (with confirm modal) |
-| `↵`             | Open terminal in workspace            |
-| `Ctrl+L`        | Focus terminal                        |
-| `Ctrl+H`        | Focus sidebar                         |
-| `Ctrl+B`        | Toggle sidebar                        |
-| `PgUp` / `PgDn` | Scroll terminal history               |
-| Mouse wheel     | Scroll terminal history               |
-| `q`             | Quit                                  |
+```fish
+horselens shell-init fish | source   # fish
+```
+
+Then `hl auth-feature` applies and cds in one step, and a bare `hl` lists your workspaces.
 
 ## How It Works
 
-When you open a workspace, HorseLens creates a directory at:
+Each workspace is a directory of symlinks pointing at your real project folders:
 
 ```
-~/.local/share/horselens/workspaces/{name}/
+~/.local/share/horselens/workspaces/auth-feature/
+├── backend -> ~/Developer/backend
+└── auth    -> ~/Developer/auth-lib
 ```
 
-Inside that directory, each `link` from your config becomes a symlink pointing to the original source folder. When you open a terminal in that workspace, your shell's working directory is this folder — so tools like `claude`, `aider`, or `grep` only traverse the symlinked projects.
+Nothing is moved or copied. `apply` reconciles that directory against the config:
 
-No files are moved or copied. Deleting a workspace only removes the symlinks, never the originals.
+```
+$ horselens status auth-feature
+auth-feature
+  ~/.local/share/horselens/workspaces/auth-feature
+  + api             -> ~/Developer/backend
+  ~ auth            -> ~/Developer/auth-lib (was ~/Developer/old-auth)
+  - removed-lib     (stale, will be removed)
+  ! NOTES.md        (not a symlink — left alone)
+```
+
+**HorseLens only ever removes symlinks it manages.** Anything that is not a symlink is reported and skipped, and `delete` refuses to run while such files are present unless you pass `--force`. Your source folders are never touched — symlinks are removed, never followed.
 
 ## Configuration
 
-**Location:** `~/.config/horselens/config.toml`
+Default location `~/.config/horselens/config.toml`:
 
 ```toml
-[[profiles]]
+# Optional: where workspaces are materialised.
+root = "~/.local/share/horselens/workspaces"
+
+[[workspaces]]
   name = "auth-feature"
 
-  [[profiles.links]]
-    src = "~/Developer/backend"
-    alias = "backend"
+  [[workspaces.links]]
+    src   = "~/Developer/backend"
+    alias = "api"
 
-  [[profiles.links]]
-    src = "~/Developer/auth-lib"
+  [[workspaces.links]]
+    src   = "~/Developer/auth-lib"
     alias = "auth"
 
-[[profiles]]
+[[workspaces]]
   name = "data-pipeline"
+  # Optional: put this one next to the projects instead of under root.
+  path = "~/Developer/_workspaces/data"
 
-  [[profiles.links]]
-    src = "~/Developer/ingestion"
+  [[workspaces.links]]
+    src   = "~/Developer/ingestion"
     alias = "ingestion"
-
-  [[profiles.links]]
-    src = "~/Developer/transforms"
-    alias = "transforms"
 ```
 
-| Field                      | Description                                    |
-| -------------------------- | ---------------------------------------------- |
-| `profiles[].name`          | Workspace name (used as directory name)        |
-| `profiles[].links[].src`   | Path to the source directory (`~` is expanded) |
-| `profiles[].links[].alias` | Name of the symlink inside the workspace       |
+| Field | Description |
+| --- | --- |
+| `root` | Directory holding all workspaces |
+| `workspaces[].name` | Workspace name; also the directory name under `root` |
+| `workspaces[].path` | Optional per-workspace directory, overriding `root` |
+| `workspaces[].links[].src` | Source directory (`~` is expanded) |
+| `workspaces[].links[].alias` | Symlink name inside the workspace |
+
+Names and aliases must be letters, digits, dot, dash or underscore, starting with a letter or digit.
+
+### Where things live
+
+Both locations are resolved in this order, highest first:
+
+| | Config file | Workspace root |
+| --- | --- | --- |
+| 1 | `--config` | `--root` |
+| 2 | `$HORSELENS_CONFIG` | `$HORSELENS_ROOT` |
+| 3 | — | `root` key in the config |
+| 4 | `$XDG_CONFIG_HOME/horselens/config.toml` | `$XDG_DATA_HOME/horselens/workspaces` |
+| 5 | `~/.config/horselens/config.toml` | `~/.local/share/horselens/workspaces` |
+
+Configs using the pre-1.0 `[[profiles]]` key are still read; they are rewritten as `[[workspaces]]` on the next save.
 
 ## Contributing
 
@@ -133,8 +186,8 @@ Contributions are welcome. Please open an issue first to discuss significant cha
 ```sh
 git clone https://github.com/rizkyizh/horse-lens.git
 cd horse-lens
+make test
 make build
-./horselens
 ```
 
 ## License
