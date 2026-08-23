@@ -56,8 +56,8 @@ Run `horselens` with no arguments for the full-screen interface, where every act
 
 | Command | Description |
 | --- | --- |
-| `horselens` | Open the workspace picker |
-| `list` | List workspaces and their state |
+| `horselens` | Open the full-screen interface |
+| `list` (`ls`) | List workspaces and their state |
 | `status [name]` | Show what `apply` would change, without changing it |
 | `new <name>` | Create an empty workspace |
 | `add <name> <src> [alias]` | Add a link; alias defaults to the source folder name |
@@ -68,6 +68,7 @@ Run `horselens` with no arguments for the full-screen interface, where every act
 | `path <name>` | Print the workspace directory |
 | `enter <name>` | Apply, then open a subshell inside the workspace |
 | `shell-init <shell>` | Print shell integration |
+| `help`, `version` | Usage summary, build version |
 
 Flags, accepted in any position: `--config <path>`, `--root <path>`, `--json` (`list`, `status`), `--force` (`delete`).
 
@@ -117,6 +118,9 @@ A workspace is just a name and a set of links, so there is no single edit screen
 | `d` | Remove a link |
 | `A` | Apply |
 | `Esc` / `h` / `←` | Back |
+| `q` | Quit |
+
+Movement and the mouse behave as they do on the workspace list.
 
 In a form, `^U` clears the current field, `↵` saves and `Esc` cancels. Forms with more than one field — Add and Edit project — also take `Tab` to move between them. Entries the workspace holds that are not symlinks are listed too, marked `left alone`; editing or removing those is refused.
 
@@ -135,7 +139,7 @@ horselens enter auth-feature   # exit to come back
 **Shell function** — a real `cd`, no nesting. Add to your shell rc:
 
 ```sh
-eval "$(horselens shell-init zsh)"   # bash, zsh, sh
+eval "$(horselens shell-init zsh)"   # bash, zsh, sh, ksh
 ```
 
 ```fish
@@ -216,7 +220,7 @@ root = "~/.local/share/horselens/workspaces"
 | `workspaces[].links[].src` | Source directory (`~` is expanded) |
 | `workspaces[].links[].alias` | Symlink name inside the workspace |
 
-Names and aliases must be letters, digits, dot, dash or underscore, starting with a letter or digit.
+Names and aliases must be letters, digits, dot, dash or underscore, starting with a letter or digit, and at most 64 characters. A name becomes a directory name and an alias a filename, so anything that could escape the workspace root is rejected — on load as well as on input, so a hand-edited config is checked too.
 
 ### Where things live
 
@@ -239,9 +243,13 @@ Contributions are welcome. Please open an issue first to discuss significant cha
 ```sh
 git clone https://github.com/rizkyizh/horse-lens.git
 cd horse-lens
-make test
-make build
+make test    # go test ./...
+make lint    # go vet ./...
+make build   # ./horselens
+make run     # go run ./cmd/horselens
 ```
+
+`make build` puts the binary in the repo as `./horselens`; `go install ./cmd/horselens` puts it on your `PATH` instead.
 
 ## License
 
