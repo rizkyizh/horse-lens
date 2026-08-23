@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the reported build version.
-const Version = "v0.2.1"
+const Version = "v0.2.2"
 
 type app struct {
 	out    io.Writer

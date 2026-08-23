@@ -95,7 +95,7 @@ Running `horselens` with no arguments opens the full-screen interface, built wit
 | `g` / `G` | Jump to first / last |
 | Mouse | Click a row to select, wheel to scroll |
 | `↵` | Apply and enter the workspace |
-| `l` / `→` | Show the workspace's links |
+| `e` / `l` / `→` | Edit the workspace's links |
 | `n` | New workspace |
 | `r` | Rename |
 | `d` | Delete (with confirmation) |
@@ -104,7 +104,9 @@ Running `horselens` with no arguments opens the full-screen interface, built wit
 | `t` | Switch theme |
 | `q` | Quit |
 
-**Link view** (`l` from the list)
+A workspace is just a name and a set of links, so there is no single edit screen: `r` renames it, and `e` opens the link view below to add or remove projects.
+
+**Link view** (`e` from the list)
 
 | Key | Action |
 | --- | --- |

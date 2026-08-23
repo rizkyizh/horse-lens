@@ -44,7 +44,7 @@ func Run(st *store.Store) (Result, error) {
 	u.buildList()
 	u.app.Pages().Push(&page{Widget: u.list, name: "Workspaces", hints: u.hints()})
 	u.app.SetInputCapture(u.keys)
-	u.app.SetFocus(u.list)
+	u.list.Focus()
 	u.refreshList()
 
 	if err := u.app.Run(); err != nil {
@@ -150,7 +150,7 @@ func (u *ui) hints() []components.KeyHint {
 	}
 	return []components.KeyHint{
 		{Key: "↵", Description: "enter"},
-		{Key: "l", Description: "links"},
+		{Key: "e/l", Description: "edit links"},
 		{Key: "n", Description: "new"},
 		{Key: "r", Description: "rename"},
 		{Key: "d", Description: "delete"},
@@ -176,7 +176,7 @@ func (u *ui) openDetail(name string) {
 	// layer has to forward HandleKey and HandleMouse, and the page name already
 	// shows which workspace this is.
 	u.app.Pages().Push(&page{Widget: t, name: name, hints: u.hints()})
-	u.app.SetFocus(t)
+	t.Focus()
 	u.showStatus()
 }
 

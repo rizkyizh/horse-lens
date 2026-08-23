@@ -72,7 +72,7 @@ func routeList(ev *tcell.EventKey) action {
 	switch ev.Rune() {
 	case 'q':
 		return actQuit
-	case 'l':
+	case 'l', 'e':
 		return actOpenLinks
 	case 'n':
 		return actNew
@@ -113,17 +113,50 @@ func routeDetail(ev *tcell.EventKey) action {
 	return actPass
 }
 
-// keys routes global shortcuts. Anything unrecognised falls through to the
-// focused widget, so the table keeps its own j/k/g/G navigation.
+// keys owns all keyboard routing.
+//
+// Dispatch is done explicitly through Pages rather than left to the app's
+// focus manager. Pages is not a core.Container, so the app cannot walk into it
+// to find the table, and focusing the table directly would strand every key
+// there — including the ones a modal needs.
 func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
-	// A modal owns the keyboard while it is open.
-	if u.app.Pages().HasModal() {
-		return ev
+	t, a := dispatch(u.app.Pages().HasModal(), u.detailFor != "", ev)
+	switch t {
+	case toShortcut:
+		return u.perform(a, ev)
+	default:
+		// Modal or plain navigation: the current page handles it.
+		u.app.Pages().HandleKey(ev)
+		return nil
 	}
-	if u.detailFor != "" {
-		return u.perform(routeDetail(ev), ev)
+}
+
+// target says where a key should go.
+type target int
+
+const (
+	// toModal: a modal is open and owns the keyboard.
+	toModal target = iota
+	// toShortcut: one of this app's own bindings.
+	toShortcut
+	// toPage: navigation, handled by the table on the current page.
+	toPage
+)
+
+// dispatch decides a key's destination. Kept pure so the routing that broke
+// once — shortcuts stealing keys from an open modal — stays covered.
+func dispatch(hasModal, inDetail bool, ev *tcell.EventKey) (target, action) {
+	if hasModal {
+		return toModal, actPass
 	}
-	return u.perform(routeList(ev), ev)
+	route := routeList
+	if inDetail {
+		route = routeDetail
+	}
+	if a := route(ev); a != actPass {
+		return toShortcut, a
+	}
+	return toPage, actPass
 }
 
 func (u *ui) perform(a action, ev *tcell.EventKey) *tcell.EventKey {

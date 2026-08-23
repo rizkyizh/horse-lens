@@ -395,3 +395,51 @@ func TestSelectedNameTracksCursorNotMarks(t *testing.T) {
 		t.Errorf("unexpected multi-select marks: %d", got)
 	}
 }
+
+// A modal must receive every key. Letting shortcuts run first meant typing a
+// name containing j, k, g or G moved the table behind the form instead.
+func TestModalOwnsTheKeyboard(t *testing.T) {
+	for _, r := range []rune{'j', 'k', 'g', 'G', 'n', 'd', 'q', 'a', 'e'} {
+		tgt, _ := dispatch(true, false, runeKey(r))
+		if tgt != toModal {
+			t.Errorf("with a modal open, %q routed to %v, want toModal", r, tgt)
+		}
+	}
+	for _, k := range []tcell.Key{tcell.KeyEnter, tcell.KeyEscape, tcell.KeyTab, tcell.KeyDown} {
+		if tgt, _ := dispatch(true, false, namedKey(k)); tgt != toModal {
+			t.Errorf("with a modal open, key %v routed to %v, want toModal", k, tgt)
+		}
+	}
+}
+
+func TestDispatchWithoutModal(t *testing.T) {
+	// Shortcuts are ours.
+	if tgt, a := dispatch(false, false, runeKey('n')); tgt != toShortcut || a != actNew {
+		t.Errorf("n routed to %v/%v, want toShortcut/actNew", tgt, a)
+	}
+	// Navigation belongs to the table.
+	for _, r := range []rune{'j', 'k', 'g', 'G'} {
+		if tgt, _ := dispatch(false, false, runeKey(r)); tgt != toPage {
+			t.Errorf("%q routed to %v, want toPage", r, tgt)
+		}
+	}
+	if tgt, _ := dispatch(false, false, namedKey(tcell.KeyDown)); tgt != toPage {
+		t.Error("Down should reach the table")
+	}
+	// The detail page has its own map.
+	if _, a := dispatch(false, true, runeKey('a')); a != actAddLink {
+		t.Errorf("a on the detail page = %v, want actAddLink", a)
+	}
+	if _, a := dispatch(false, false, runeKey('a')); a != actApply {
+		t.Errorf("a on the list = %v, want actApply", a)
+	}
+}
+
+// Users look for "edit", so e is an alias for opening the link view.
+func TestEditAliasOpensLinks(t *testing.T) {
+	for _, r := range []rune{'l', 'e'} {
+		if got := routeList(runeKey(r)); got != actOpenLinks {
+			t.Errorf("routeList(%q) = %v, want actOpenLinks", r, got)
+		}
+	}
+}
