@@ -674,3 +674,30 @@ func TestFormHintsMatchFieldCount(t *testing.T) {
 		t.Error("multi-field form should advertise Tab")
 	}
 }
+
+// dado modals draw exactly the size they are configured with, so the height
+// has to cover every field. Too short and the last field slid under the hints.
+func TestFormModalSizeFitsFields(t *testing.T) {
+	// A labelled text field occupies 4 rows and Form adds 1 of spacing.
+	const perField = 5
+
+	for _, n := range []int{1, 2, 3} {
+		_, h := formModalSize(n)
+		content := h - 4 // panel border, hint bar, breathing room
+		if content < n*perField {
+			t.Errorf("%d fields: content height %d < %d needed", n, content, n*perField)
+		}
+	}
+
+	// Growing the form must grow the modal.
+	_, h1 := formModalSize(1)
+	_, h2 := formModalSize(2)
+	if h2 <= h1 {
+		t.Errorf("two fields (%d) is not taller than one (%d)", h2, h1)
+	}
+
+	// A degenerate count must still produce a usable box.
+	if w, h := formModalSize(0); w < 20 || h < 8 {
+		t.Errorf("formModalSize(0) = %dx%d, too small", w, h)
+	}
+}

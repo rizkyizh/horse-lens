@@ -10,6 +10,25 @@ import (
 // field describes one text input in a modal form.
 type field struct{ name, label, placeholder, initial string }
 
+// formModalSize returns a size that fits the fields without the form having to
+// scroll. dado modals do not size to their content — whatever the config says
+// is what gets drawn — so leaving the height short made the second field slide
+// under the hint bar.
+func formModalSize(fieldCount int) (width, height int) {
+	const (
+		// A labelled text field draws its label plus a three-row bordered
+		// input, and Form adds one row of spacing after each.
+		fieldRows = 5
+		// Panel border top and bottom, the hint bar, and a row of breathing
+		// room above it.
+		chrome = 4
+	)
+	if fieldCount < 1 {
+		fieldCount = 1
+	}
+	return 72, chrome + fieldCount*fieldRows
+}
+
 // formHints describes the keys a form actually responds to. Tab only moves
 // somewhere when there is more than one field, and advertising it on a
 // single-field dialog reads as a broken binding.
@@ -41,8 +60,9 @@ func (u *ui) formModal(title string, fields []field, onSubmit func(map[string]st
 		}
 	}
 
+	width, height := formModalSize(len(fields))
 	modal := components.NewModal(components.ModalConfig{
-		Title: title, Width: 68, MinHeight: 9, Backdrop: true,
+		Title: title, Width: width, Height: height, Backdrop: true,
 	})
 	modal.SetHints(formHints(len(fields)))
 
