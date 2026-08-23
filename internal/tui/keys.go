@@ -8,6 +8,10 @@ import (
 )
 
 // page adapts a plain dado widget into a nav.Component, which Pages requires.
+//
+// core.Widget does not include HandleKey or HandleMouse, so embedding it alone
+// hides those methods on the wrapped widget and the app can no longer deliver
+// keys or clicks to it. Both are forwarded explicitly.
 type page struct {
 	core.Widget
 	name  string
@@ -18,6 +22,23 @@ func (p *page) Name() string                { return p.name }
 func (p *page) Start()                      {}
 func (p *page) Stop()                       {}
 func (p *page) Hints() []components.KeyHint { return p.hints }
+
+// HandleKey forwards to the wrapped widget, which is how the table keeps its
+// own arrow and j/k/g/G navigation.
+func (p *page) HandleKey(ev *tcell.EventKey) bool {
+	if h, ok := p.Widget.(core.KeyHandler); ok {
+		return h.HandleKey(ev)
+	}
+	return false
+}
+
+// HandleMouse forwards clicks and scroll to the wrapped widget.
+func (p *page) HandleMouse(action core.MouseAction, ev *tcell.EventMouse) (bool, core.Widget) {
+	if h, ok := p.Widget.(core.MouseHandler); ok {
+		return h.HandleMouse(action, ev)
+	}
+	return false, nil
+}
 
 // action is what a key means. Routing is kept separate from performing the
 // action so the bindings can be tested without a running terminal.

@@ -44,6 +44,7 @@ func Run(st *store.Store) (Result, error) {
 	u.buildList()
 	u.app.Pages().Push(&page{Widget: u.list, name: "Workspaces", hints: u.hints()})
 	u.app.SetInputCapture(u.keys)
+	u.app.SetFocus(u.list)
 	u.refreshList()
 
 	if err := u.app.Run(); err != nil {
@@ -92,12 +93,10 @@ func summaryText(r store.Summary) string {
 	}
 }
 
+// selectedRow is the cursor position, in data rows. GetSelectedRows reports
+// multi-select marks instead, which are never set here.
 func (u *ui) selectedRow() int {
-	rows := u.list.GetSelectedRows()
-	if len(rows) == 0 {
-		return 0
-	}
-	return rows[0]
+	return u.list.SelectedRow()
 }
 
 func (u *ui) restoreRow(i int) {
@@ -108,7 +107,10 @@ func (u *ui) restoreRow(i int) {
 	if i >= n {
 		i = n - 1
 	}
-	u.list.ScrollToRow(i)
+	if i < 0 {
+		i = 0
+	}
+	u.list.SelectRow(i)
 }
 
 // selectedName is the workspace under the cursor on the list page.
@@ -170,10 +172,11 @@ func (u *ui) openDetail(name string) {
 	u.links = t
 	u.refreshDetail()
 
-	panel := components.NewPanel().
-		SetTitle(fmt.Sprintf(" %s ", name)).
-		SetContent(t)
-	u.app.Pages().Push(&page{Widget: panel, name: name, hints: u.hints()})
+	// The table is pushed directly rather than wrapped in a Panel: every extra
+	// layer has to forward HandleKey and HandleMouse, and the page name already
+	// shows which workspace this is.
+	u.app.Pages().Push(&page{Widget: t, name: name, hints: u.hints()})
+	u.app.SetFocus(t)
 	u.showStatus()
 }
 
@@ -192,11 +195,7 @@ func (u *ui) refreshDetail() {
 
 func (u *ui) selectedAlias() string {
 	links := u.ctl.Links(u.detailFor)
-	rows := u.links.GetSelectedRows()
-	i := 0
-	if len(rows) > 0 {
-		i = rows[0]
-	}
+	i := u.links.SelectedRow()
 	if i < 0 || i >= len(links) {
 		return ""
 	}

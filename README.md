@@ -92,6 +92,8 @@ Running `horselens` with no arguments opens the full-screen interface, built wit
 | Key | Action |
 | --- | --- |
 | `↑` `↓` / `k` `j` | Move |
+| `g` / `G` | Jump to first / last |
+| Mouse | Click a row to select, wheel to scroll |
 | `↵` | Apply and enter the workspace |
 | `l` / `→` | Show the workspace's links |
 | `n` | New workspace |

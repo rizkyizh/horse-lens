@@ -8,6 +8,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/atterpac/dado/core"
+
 	"github.com/rizkyizh/horse-lens/internal/config"
 	"github.com/rizkyizh/horse-lens/internal/store"
 )
@@ -311,5 +313,85 @@ func TestDeleteKeyIsPageScoped(t *testing.T) {
 	}
 	if routeDetail(runeKey('d')) != actRemoveLink {
 		t.Error("d on the link view should remove the link")
+	}
+}
+
+// --- page adapter -----------------------------------------------------------
+
+// core.Widget carries neither HandleKey nor HandleMouse, so embedding it in the
+// page adapter silently hides them on the wrapped widget and the app can no
+// longer deliver keys or clicks. Both must be forwarded.
+func TestPageAdapterForwardsInput(t *testing.T) {
+	var _ core.KeyHandler = (*page)(nil)
+	var _ core.MouseHandler = (*page)(nil)
+
+	c, _ := newCtl(t)
+	for _, n := range []string{"alpha", "beta", "gamma"} {
+		c.Create(n)
+	}
+	u := &ui{ctl: c}
+	u.buildList()
+	u.fillList()
+	p := &page{Widget: u.list, name: "Workspaces"}
+
+	if got := u.selectedName(); got != "alpha" {
+		t.Fatalf("cursor starts at %q, want alpha", got)
+	}
+
+	// Arrow keys must reach the table through the adapter.
+	if !p.HandleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) {
+		t.Fatal("adapter did not forward KeyDown to the table")
+	}
+	if got := u.selectedName(); got != "beta" {
+		t.Errorf("after Down, cursor = %q, want beta", got)
+	}
+
+	// Vim keys are handled by the table itself.
+	p.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'j', tcell.ModNone))
+	if got := u.selectedName(); got != "gamma" {
+		t.Errorf("after j, cursor = %q, want gamma", got)
+	}
+	p.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModNone))
+	if got := u.selectedName(); got != "beta" {
+		t.Errorf("after k, cursor = %q, want beta", got)
+	}
+	p.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'g', tcell.ModNone))
+	if got := u.selectedName(); got != "alpha" {
+		t.Errorf("after g, cursor = %q, want alpha", got)
+	}
+	p.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'G', tcell.ModNone))
+	if got := u.selectedName(); got != "gamma" {
+		t.Errorf("after G, cursor = %q, want gamma", got)
+	}
+
+	// A click must select the row under the pointer.
+	u.list.SetRect(0, 0, 80, 10)
+	u.list.SelectRow(0)
+	consumed, _ := p.HandleMouse(core.MouseLeftClick,
+		tcell.NewEventMouse(2, 2, tcell.Button1, tcell.ModNone))
+	if !consumed {
+		t.Fatal("adapter did not forward a click to the table")
+	}
+	if u.selectedName() == "alpha" {
+		t.Error("click did not move the cursor off the first row")
+	}
+}
+
+// selectedName must read the cursor, not the multi-select marks.
+func TestSelectedNameTracksCursorNotMarks(t *testing.T) {
+	c, _ := newCtl(t)
+	c.Create("first")
+	c.Create("second")
+	u := &ui{ctl: c}
+	u.buildList()
+	u.fillList()
+
+	u.list.SelectRow(1)
+	if got := u.selectedName(); got != "second" {
+		t.Errorf("selectedName = %q, want second", got)
+	}
+	// Multi-select marks must not influence it.
+	if got := len(u.list.GetSelectedRows()); got != 0 {
+		t.Errorf("unexpected multi-select marks: %d", got)
 	}
 }
