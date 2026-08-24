@@ -151,6 +151,7 @@ func (u *ui) hints() []components.KeyHint {
 		{Key: "r", Description: "rename"},
 		{Key: "d", Description: "delete"},
 		{Key: "a/A", Description: "apply/all"},
+		{Key: "s", Description: "root"},
 		{Key: "q", Description: "quit"},
 	}
 }

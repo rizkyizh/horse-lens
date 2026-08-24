@@ -91,3 +91,36 @@ func Resolve(o Overrides) (Paths, *File, error) {
 	}
 	return Paths{Config: cfgPath, Root: root}, f, nil
 }
+
+// RootOrigin names where the effective workspace root came from. The UI needs
+// it to explain why editing the config key may change nothing.
+type RootOrigin string
+
+const (
+	RootFromFlag    RootOrigin = "--root flag"
+	RootFromEnv     RootOrigin = "$" + EnvRoot
+	RootFromConfig  RootOrigin = "the config file"
+	RootFromXDG     RootOrigin = "$XDG_DATA_HOME"
+	RootFromDefault RootOrigin = "the default location"
+)
+
+// OverridesRoot reports whether something outranks the config's root key.
+func (o RootOrigin) OverridesRoot() bool {
+	return o == RootFromFlag || o == RootFromEnv
+}
+
+// RootSource mirrors ResolveRoot's precedence.
+func RootSource(o Overrides, f *File) RootOrigin {
+	switch {
+	case o.Root != "":
+		return RootFromFlag
+	case os.Getenv(EnvRoot) != "":
+		return RootFromEnv
+	case f != nil && f.Root != "":
+		return RootFromConfig
+	case os.Getenv("XDG_DATA_HOME") != "":
+		return RootFromXDG
+	default:
+		return RootFromDefault
+	}
+}

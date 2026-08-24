@@ -122,6 +122,20 @@ func (u *ui) renameWorkspace(name string) {
 		})
 }
 
+func (u *ui) setRoot() {
+	current := u.ctl.Root()
+	label := "Workspace root"
+	if overridden, src := u.ctl.RootOverridden(); overridden {
+		label = "Workspace root (" + src + " currently overrides this)"
+	}
+	u.formModal("Workspace root",
+		[]field{{name: "root", label: label, placeholder: "~/Developer/workspaces", initial: current}},
+		func(v map[string]string) {
+			u.ctl.SetRoot(v["root"])
+			u.refreshList()
+		})
+}
+
 func (u *ui) deleteWorkspace(name string) {
 	if name == "" {
 		return

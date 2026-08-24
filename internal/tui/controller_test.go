@@ -701,3 +701,129 @@ func TestFormModalSizeFitsFields(t *testing.T) {
 		t.Errorf("formModalSize(0) = %dx%d, too small", w, h)
 	}
 }
+
+// --- workspace root ---------------------------------------------------------
+
+// newRootCtl puts the root in the config file rather than the environment, so
+// SetRoot is exercised on the path where the config key actually wins.
+func newRootCtl(t *testing.T) (*Controller, string) {
+	t.Helper()
+	dir := t.TempDir()
+	root := filepath.Join(dir, "ws")
+	cfg := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfg, []byte("root = \""+root+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HORSELENS_CONFIG", cfg)
+	t.Setenv("HORSELENS_ROOT", "")
+	t.Setenv("XDG_DATA_HOME", "")
+
+	st, err := store.Open(config.Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewController(st)
+	c.Refresh()
+	return c, root
+}
+
+// Changing the root must move the existing directory. Recreating the symlinks
+// at the new location instead would strand every unmanaged file — the .claude
+// directories people keep inside a workspace.
+func TestSetRootMovesTheDirectory(t *testing.T) {
+	c, root := newRootCtl(t)
+	src := srcDir(t, "api")
+	c.Create("w")
+	c.AddLink("w", src, "api")
+
+	// Something unmanaged, of the kind that must survive.
+	claude := filepath.Join(root, "w", ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(`{"a":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	newRoot := filepath.Join(t.TempDir(), "elsewhere")
+	if !c.SetRoot(newRoot) {
+		t.Fatalf("SetRoot: %s", mustMsg(c))
+	}
+
+	if c.Root() != newRoot {
+		t.Errorf("Root() = %q, want %q", c.Root(), newRoot)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Error("old root left behind")
+	}
+	b, err := os.ReadFile(filepath.Join(newRoot, "w", ".claude", "settings.json"))
+	if err != nil || string(b) != `{"a":1}` {
+		t.Errorf("unmanaged file did not travel: %q %v", b, err)
+	}
+	if got, _ := os.Readlink(filepath.Join(newRoot, "w", "api")); got != src {
+		t.Errorf("symlink after move = %q, want %q", got, src)
+	}
+
+	// No reconcile should be needed afterwards.
+	if rows := c.Rows(); len(rows) != 1 || rows[0].Drift != 0 {
+		t.Errorf("rows after move = %+v, want no drift", rows)
+	}
+}
+
+// Pointing at a directory that already exists must not merge or clobber it.
+func TestSetRootLeavesExistingDestinationAlone(t *testing.T) {
+	c, root := newRootCtl(t)
+	c.Create("w")
+	c.AddLink("w", srcDir(t, "api"), "api")
+
+	dest := filepath.Join(t.TempDir(), "already-there")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dest, "keep.txt")
+	if err := os.WriteFile(marker, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !c.SetRoot(dest) {
+		t.Fatalf("SetRoot: %s", mustMsg(c))
+	}
+	if b, err := os.ReadFile(marker); err != nil || string(b) != "mine" {
+		t.Errorf("destination content was disturbed: %q %v", b, err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Error("old root was removed even though nothing moved")
+	}
+	if msg, _ := c.Status(); !strings.Contains(msg, "left in place") {
+		t.Errorf("status = %q, should mention the directory left behind", msg)
+	}
+}
+
+// An env override outranks the config key, so saving it changes nothing until
+// the override is removed. Saying so beats silently doing nothing.
+func TestSetRootWarnsWhenOverridden(t *testing.T) {
+	c, _ := newCtl(t)
+	c.Create("w")
+
+	t.Setenv("HORSELENS_ROOT", filepath.Join(t.TempDir(), "forced"))
+	overridden, src := c.RootOverridden()
+	if !overridden {
+		t.Fatalf("RootOverridden() = false, src=%q", src)
+	}
+
+	c.SetRoot(filepath.Join(t.TempDir(), "wanted"))
+	msg, failed := c.Status()
+	if !failed || !strings.Contains(msg, "overrides it") {
+		t.Errorf("status = %q failed=%v, want an override warning", msg, failed)
+	}
+}
+
+func TestRootKeyIsRouted(t *testing.T) {
+	if got := routeList(runeKey('s')); got != actSetRoot {
+		t.Errorf("routeList(s) = %v, want actSetRoot", got)
+	}
+	// The link view has no root editor; s must fall through there.
+	if got := routeDetail(runeKey('s')); got != actPass {
+		t.Errorf("routeDetail(s) = %v, want actPass", got)
+	}
+}

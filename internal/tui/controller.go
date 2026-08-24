@@ -176,6 +176,44 @@ func (c *Controller) ApplyAll() {
 	c.Refresh()
 }
 
+// Root is the directory all workspaces materialise under, unless a workspace
+// overrides it with its own path.
+func (c *Controller) Root() string { return c.st.Paths().Root }
+
+// RootOverridden reports whether a flag or environment variable is outranking
+// the config's root key, which makes editing it here take no effect.
+func (c *Controller) RootOverridden() (bool, string) {
+	src := c.st.RootSource()
+	return src.OverridesRoot(), string(src)
+}
+
+// SetRoot moves the workspace root and records it in the config.
+func (c *Controller) SetRoot(raw string) bool {
+	old := c.st.Paths().Root
+	moved, err := c.st.SetRoot(raw)
+	if err != nil {
+		c.fail(err)
+		return false
+	}
+	// An override means the saved key will not take effect, and nothing was
+	// moved; say that instead of reporting a change that did not happen.
+	if overridden, src := c.RootOverridden(); overridden {
+		c.fail(fmt.Errorf("saved to the config, but %s overrides it — unset it for this to take effect", src))
+		c.Refresh()
+		return true
+	}
+	switch {
+	case c.st.Paths().Root == old:
+		c.ok("root unchanged")
+	case moved:
+		c.ok("root moved to %s", c.st.Paths().Root)
+	default:
+		c.ok("root is now %s — %s was left in place", c.st.Paths().Root, old)
+	}
+	c.Refresh()
+	return true
+}
+
 func (c *Controller) Create(name string) bool {
 	if err := c.st.Create(name); err != nil {
 		c.fail(err)

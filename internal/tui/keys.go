@@ -57,6 +57,7 @@ const (
 	actApplyAll
 	actReload
 	actTheme
+	actSetRoot
 	actAddLink
 	actEditLink
 	actRemoveLink
@@ -89,6 +90,8 @@ func routeList(ev *tcell.EventKey) action {
 		return actReload
 	case 't':
 		return actTheme
+	case 's':
+		return actSetRoot
 	}
 	return actPass
 }
@@ -217,6 +220,8 @@ func (u *ui) perform(a action, ev *tcell.EventKey) *tcell.EventKey {
 		u.refreshList()
 	case actTheme:
 		u.app.OpenThemeSelector()
+	case actSetRoot:
+		u.setRoot()
 
 	case actAddLink:
 		u.addLink()

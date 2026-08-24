@@ -16,6 +16,7 @@ import (
 type Store struct {
 	paths config.Paths
 	file  *config.File
+	over  config.Overrides
 }
 
 // Open resolves paths and loads the config.
@@ -24,11 +25,63 @@ func Open(over config.Overrides) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{paths: paths, file: f}, nil
+	return &Store{paths: paths, file: f, over: over}, nil
 }
 
 // Paths reports where the config file and workspace root live.
 func (s *Store) Paths() config.Paths { return s.paths }
+
+// RootSource reports where the effective root came from, so the caller can say
+// when a flag or environment variable is outranking the config key.
+func (s *Store) RootSource() config.RootOrigin {
+	return config.RootSource(s.over, s.file)
+}
+
+// SetRoot points the config at a new workspace root, moving the existing
+// directory across so unmanaged files travel with it. Recreating the symlinks
+// at the new location instead would strand everything that is not a symlink.
+//
+// It reports whether a directory was actually moved.
+func (s *Store) SetRoot(raw string) (bool, error) {
+	newRoot, err := config.ExpandPath(raw)
+	if err != nil {
+		return false, err
+	}
+	oldRoot := s.paths.Root
+	if newRoot == oldRoot {
+		return false, nil
+	}
+
+	// A flag or environment variable outranks the config key, so the effective
+	// root is not about to change. Moving the directory anyway would point the
+	// tool at a location that no longer exists, so only record the preference.
+	if s.RootSource().OverridesRoot() {
+		s.file.Root = raw
+		return false, s.save()
+	}
+
+	moved := false
+	if _, statErr := os.Stat(oldRoot); statErr == nil {
+		if _, dstErr := os.Stat(newRoot); dstErr == nil {
+			// Something is already there. Point at it rather than merging or
+			// clobbering, and let the caller mention the directory left behind.
+			moved = false
+		} else {
+			ok, mErr := workspace.Move(oldRoot, newRoot)
+			if mErr != nil {
+				return false, fmt.Errorf("move %s to %s: %w", oldRoot, newRoot, mErr)
+			}
+			moved = ok
+		}
+	}
+
+	s.file.Root = raw
+	if err := s.save(); err != nil {
+		return moved, err
+	}
+	s.paths.Root = newRoot
+	return moved, nil
+}
 
 // Reload re-reads the config from disk, picking up external edits.
 func (s *Store) Reload() error {

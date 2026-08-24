@@ -104,10 +104,13 @@ Running `horselens` with no arguments opens the full-screen interface, built wit
 | `d` | Delete (with confirmation) |
 | `a` / `A` | Apply selected / apply all |
 | `R` | Reload the config from disk |
+| `s` | Change the workspace root |
 | `t` | Switch theme |
 | `q` | Quit |
 
 A workspace is just a name and a set of links, so there is no single edit screen: `r` renames it, and `e` opens the link view below to add or remove projects.
+
+`s` edits the workspace root. It moves the existing directory rather than rebuilding it, so unmanaged files travel along and nothing needs reconciling afterwards. If the destination already exists it is left untouched and the old directory stays put; if `--root` or `$HORSELENS_ROOT` is set, the key is saved but the override still wins and the interface says so.
 
 **Link view** (`e` from the list)
 
@@ -214,7 +217,7 @@ root = "~/.local/share/horselens/workspaces"
 
 | Field | Description |
 | --- | --- |
-| `root` | Directory holding all workspaces |
+| `root` | Directory holding all workspaces (change it with `s` in the interface, which moves the directory too) |
 | `workspaces[].name` | Workspace name; also the directory name under `root` |
 | `workspaces[].path` | Optional per-workspace directory, overriding `root` |
 | `workspaces[].links[].src` | Source directory (`~` is expanded) |
