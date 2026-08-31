@@ -130,6 +130,12 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	switch t {
 	case toShortcut:
 		return u.perform(a, ev)
+	case toModal:
+		if u.modalKey != nil && u.modalKey(ev) {
+			return nil
+		}
+		u.app.Pages().HandleKey(ev)
+		return nil
 	default:
 		// Modal or plain navigation: the current page handles it.
 		u.app.Pages().HandleKey(ev)

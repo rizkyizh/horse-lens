@@ -7,6 +7,7 @@ import (
 	"github.com/atterpac/dado/layout"
 	"github.com/atterpac/dado/theme"
 	"github.com/atterpac/dado/theme/themes"
+	"github.com/gdamore/tcell/v2"
 
 	"github.com/rizkyizh/horse-lens/internal/store"
 )
@@ -26,6 +27,9 @@ type ui struct {
 	// comma-ok assertion to the wrong one just skips the update.
 	status *layout.StatusBar
 	list   *components.Table
+	// modalKey lets an open modal claim keys before the modal itself sees
+	// them; formModal installs it for completion and clears it on close.
+	modalKey func(*tcell.EventKey) bool
 	// links is the detail table for the workspace named in detailFor.
 	links     *components.Table
 	detailFor string

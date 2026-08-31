@@ -827,3 +827,110 @@ func TestRootKeyIsRouted(t *testing.T) {
 		t.Errorf("routeDetail(s) = %v, want actPass", got)
 	}
 }
+
+// --- path completion --------------------------------------------------------
+
+func TestCompletePath(t *testing.T) {
+	base := t.TempDir()
+	for _, d := range []string{"alpha", "alpine", "beta", ".hidden"} {
+		if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(base, "afile.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A trailing slash lists the directory; files are never offered.
+	got := completePath(base + "/")
+	want := []string{
+		filepath.Join(base, "alpha") + "/",
+		filepath.Join(base, "alpine") + "/",
+		filepath.Join(base, "beta") + "/",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("listing = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("candidate %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// A partial last segment filters within the parent.
+	got = completePath(filepath.Join(base, "alp"))
+	if len(got) != 2 {
+		t.Fatalf("prefix alp = %v, want alpha and alpine", got)
+	}
+
+	// Hidden directories stay out until asked for by name.
+	for _, c := range completePath(base + "/") {
+		if strings.Contains(filepath.Base(strings.TrimSuffix(c, "/")), ".hidden") {
+			t.Error("hidden directory offered without being asked for")
+		}
+	}
+	if len(completePath(filepath.Join(base, ".hid"))) != 1 {
+		t.Error("hidden directory not offered when typed by name")
+	}
+
+	// Nonsense input must not panic or invent candidates.
+	for _, in := range []string{"", "   ", filepath.Join(base, "nope", "deeper")} {
+		if got := completePath(in); got != nil && len(got) != 0 {
+			t.Errorf("completePath(%q) = %v, want none", in, got)
+		}
+	}
+}
+
+// A path typed with ~ must come back with ~, so accepting a completion does
+// not rewrite a portable config entry into an absolute one.
+func TestCompletePathKeepsTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Skip("cannot read home")
+	}
+	var sample string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			sample = e.Name()
+			break
+		}
+	}
+	if sample == "" {
+		t.Skip("no visible directory in home")
+	}
+
+	got := completePath("~/" + sample[:1])
+	if len(got) == 0 {
+		t.Fatalf("no candidates for ~/%s", sample[:1])
+	}
+	for _, c := range got {
+		if !strings.HasPrefix(c, "~/") {
+			t.Errorf("candidate %q lost the ~ form", c)
+		}
+	}
+	// The absolute form must not leak in.
+	for _, c := range got {
+		if strings.HasPrefix(c, home) {
+			t.Errorf("candidate %q was expanded", c)
+		}
+	}
+}
+
+func TestCycleWraps(t *testing.T) {
+	if got := cycle(-1, 1, 3); got != 0 {
+		t.Errorf("first Down = %d, want 0", got)
+	}
+	if got := cycle(2, 1, 3); got != 0 {
+		t.Errorf("Down past the end = %d, want wrap to 0", got)
+	}
+	if got := cycle(0, -1, 3); got != 2 {
+		t.Errorf("Up past the start = %d, want wrap to 2", got)
+	}
+	if got := cycle(-1, 1, 0); got != -1 {
+		t.Errorf("no candidates = %d, want -1", got)
+	}
+}
