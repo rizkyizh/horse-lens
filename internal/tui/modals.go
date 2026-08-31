@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/atterpac/dado/components"
+	"github.com/atterpac/dado/core"
+	"github.com/atterpac/dado/theme"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -19,7 +21,7 @@ type field struct {
 // scroll. dado modals do not size to their content — whatever the config says
 // is what gets drawn — so leaving the height short made the second field slide
 // under the hint bar.
-func formModalSize(fieldCount int) (width, height int) {
+func formModalSize(fieldCount int, withSuggestions bool) (width, height int) {
 	const (
 		// A labelled text field draws its label plus a three-row bordered
 		// input, and Form adds one row of spacing after each.
@@ -31,7 +33,25 @@ func formModalSize(fieldCount int) (width, height int) {
 	if fieldCount < 1 {
 		fieldCount = 1
 	}
-	return 72, chrome + fieldCount*fieldRows
+	h := chrome + fieldCount*fieldRows
+	if withSuggestions {
+		h += suggestionRows
+	}
+	return 72, h
+}
+
+// chromeRows is the non-field part of a form modal: panel border top and
+// bottom, the hint bar, and a row of breathing room.
+const chromeRows = 4
+
+// anyComplete reports whether any field offers path completion.
+func anyComplete(fields []field) bool {
+	for _, f := range fields {
+		if f.complete {
+			return true
+		}
+	}
+	return false
 }
 
 // formHints describes the keys a form actually responds to. Tab only moves
@@ -72,7 +92,7 @@ func (u *ui) formModal(title string, fields []field, onSubmit func(map[string]st
 		}
 	}
 
-	width, height := formModalSize(len(fields))
+	width, height := formModalSize(len(fields), anyComplete(fields))
 	modal := components.NewModal(components.ModalConfig{
 		Title: title, Width: width, Height: height, Backdrop: true,
 	})
@@ -89,57 +109,116 @@ func (u *ui) formModal(title string, fields []field, onSubmit func(map[string]st
 	form.SetOnCancel(func() { modal.Cancel() })
 
 	if len(completes) > 0 {
-		u.modalKey = completionHandler(form, completes)
-	}
-	modal.SetOnClose(func() { u.modalKey = nil })
+		// Form and suggestion list are stacked so the candidates are visible
+		// while cycling; the modal is sized for both.
+		view := core.NewTextView()
+		view.SetDynamicColors(true)
+		view.SetTextAlign(core.AlignLeft)
 
+		body := core.NewFlex().SetDirection(core.Column)
+		body.AddItem(form, height-chromeRows-suggestionRows, 0, true)
+		body.AddItem(view, suggestionRows, 0, false)
+
+		state := newCompletionState(form, completes, view)
+		for name := range completes {
+			if tf, ok := form.GetTextField(name); ok {
+				tf.SetOnChange(func(*components.ChangeEvent[string]) { state.reset() })
+			}
+		}
+		state.render()
+
+		u.modalKey = state.handleKey
+		modal.SetOnClose(func() { u.modalKey = nil })
+		modal.SetContent(body).SetFocusOnShow(form)
+		u.app.ShowModal(modal)
+		return
+	}
+
+	modal.SetOnClose(func() { u.modalKey = nil })
 	modal.SetContent(form).SetFocusOnShow(form)
 	u.app.ShowModal(modal)
 }
 
-// completionHandler returns a key hook that walks directory completions for
-// the focused field. It runs before the modal sees the key, because the form
-// would otherwise never receive down and up at all.
-func completionHandler(form *components.Form, completes map[string]bool) func(*tcell.EventKey) bool {
-	var (
-		lastPrefix string
-		candidates []string
-		index      = -1
-	)
-	return func(ev *tcell.EventKey) bool {
-		var step int
-		switch ev.Key() {
-		case tcell.KeyDown:
-			step = 1
-		case tcell.KeyUp:
-			step = -1
-		default:
-			// Any other key means the user is typing again, so the candidate
-			// list is stale.
-			lastPrefix, candidates, index = "", nil, -1
-			return false
-		}
+// completionState tracks the candidate list for the focused path field and
+// keeps the visible list in step with it.
+type completionState struct {
+	form       *components.Form
+	completes  map[string]bool
+	view       *core.TextView
+	candidates []string
+	index      int
+}
 
-		for name := range completes {
-			tf, ok := form.GetTextField(name)
-			if !ok || !tf.HasFocus() {
-				continue
-			}
-			// Recompute only when the text is not one we just inserted.
-			if index < 0 || index >= len(candidates) || tf.GetValue() != candidates[index] {
-				lastPrefix = tf.GetValue()
-				candidates = completePath(lastPrefix)
-				index = -1
-			}
-			if len(candidates) == 0 {
-				return true
-			}
-			index = cycle(index, step, len(candidates))
-			tf.SetValue(candidates[index])
-			return true
+func newCompletionState(form *components.Form, completes map[string]bool, view *core.TextView) *completionState {
+	return &completionState{form: form, completes: completes, view: view, index: -1}
+}
+
+// focused returns the completing field that currently has focus.
+func (c *completionState) focused() (*components.TextField, bool) {
+	for name := range c.completes {
+		if tf, ok := c.form.GetTextField(name); ok && tf.HasFocus() {
+			return tf, true
 		}
+	}
+	return nil, false
+}
+
+// reset recomputes the candidates from what is typed. Called on every edit.
+func (c *completionState) reset() {
+	c.index = -1
+	c.candidates = nil
+	if tf, ok := c.focused(); ok {
+		c.candidates = completePath(tf.GetValue())
+	}
+	c.render()
+}
+
+func (c *completionState) render() {
+	if c.view == nil {
+		return
+	}
+	lines := renderSuggestions(c.candidates, c.index, suggestionRows)
+	styled := make([]string, 0, len(lines))
+	for _, l := range lines {
+		colour := theme.TagFgMuted()
+		if strings.HasPrefix(l, "> ") {
+			colour = theme.TagAccent()
+		}
+		styled = append(styled, "["+colour+"]"+l+"[-]")
+	}
+	c.view.SetText(strings.Join(styled, "\n"))
+}
+
+// handleKey walks the candidates. It runs before the modal, because the form
+// would otherwise consume the arrow keys first.
+func (c *completionState) handleKey(ev *tcell.EventKey) bool {
+	var step int
+	switch ev.Key() {
+	case tcell.KeyDown:
+		step = 1
+	case tcell.KeyUp:
+		step = -1
+	default:
 		return false
 	}
+
+	tf, ok := c.focused()
+	if !ok {
+		return false
+	}
+	// Recompute when the text is not one this handler just inserted.
+	if c.index < 0 || c.index >= len(c.candidates) || tf.GetValue() != c.candidates[c.index] {
+		c.candidates = completePath(tf.GetValue())
+		c.index = -1
+	}
+	if len(c.candidates) == 0 {
+		c.render()
+		return true
+	}
+	c.index = cycle(c.index, step, len(c.candidates))
+	tf.SetValue(c.candidates[c.index])
+	c.render()
+	return true
 }
 
 // confirmModal builds a yes/no modal.

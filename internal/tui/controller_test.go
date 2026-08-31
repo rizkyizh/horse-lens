@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -682,7 +683,7 @@ func TestFormModalSizeFitsFields(t *testing.T) {
 	const perField = 5
 
 	for _, n := range []int{1, 2, 3} {
-		_, h := formModalSize(n)
+		_, h := formModalSize(n, false)
 		content := h - 4 // panel border, hint bar, breathing room
 		if content < n*perField {
 			t.Errorf("%d fields: content height %d < %d needed", n, content, n*perField)
@@ -690,14 +691,21 @@ func TestFormModalSizeFitsFields(t *testing.T) {
 	}
 
 	// Growing the form must grow the modal.
-	_, h1 := formModalSize(1)
-	_, h2 := formModalSize(2)
+	_, h1 := formModalSize(1, false)
+	_, h2 := formModalSize(2, false)
 	if h2 <= h1 {
 		t.Errorf("two fields (%d) is not taller than one (%d)", h2, h1)
 	}
 
+	// Reserving the suggestion list makes the modal taller.
+	_, plain := formModalSize(2, false)
+	_, withList := formModalSize(2, true)
+	if withList != plain+suggestionRows {
+		t.Errorf("with suggestions = %d, want %d", withList, plain+suggestionRows)
+	}
+
 	// A degenerate count must still produce a usable box.
-	if w, h := formModalSize(0); w < 20 || h < 8 {
+	if w, h := formModalSize(0, false); w < 20 || h < 8 {
 		t.Errorf("formModalSize(0) = %dx%d, too small", w, h)
 	}
 }
@@ -932,5 +940,82 @@ func TestCycleWraps(t *testing.T) {
 	}
 	if got := cycle(-1, 1, 0); got != -1 {
 		t.Errorf("no candidates = %d, want -1", got)
+	}
+}
+
+func TestRenderSuggestions(t *testing.T) {
+	// Nothing typed yet, or nothing matches.
+	if got := renderSuggestions(nil, -1, 6); len(got) != 1 || !strings.Contains(got[0], "no matching") {
+		t.Errorf("empty list = %v", got)
+	}
+
+	all := []string{"alpha/", "alpine/", "beta/"}
+
+	// Nothing selected: every line is unmarked.
+	for _, l := range renderSuggestions(all, -1, 6) {
+		if strings.HasPrefix(l, "> ") {
+			t.Errorf("unselected list marked a line: %q", l)
+		}
+	}
+
+	// The selected line carries the marker, and only it.
+	lines := renderSuggestions(all, 1, 6)
+	marked := 0
+	for _, l := range lines {
+		if strings.HasPrefix(l, "> ") {
+			marked++
+			if !strings.Contains(l, "alpine/") {
+				t.Errorf("wrong line marked: %q", l)
+			}
+		}
+	}
+	if marked != 1 {
+		t.Errorf("%d lines marked, want 1", marked)
+	}
+}
+
+// A list longer than the reserved rows must window around the selection and
+// still say how far through it the cursor is.
+func TestRenderSuggestionsWindowsLongLists(t *testing.T) {
+	var many []string
+	for i := 0; i < 20; i++ {
+		many = append(many, fmt.Sprintf("dir%02d/", i))
+	}
+	const rows = 6
+
+	for _, sel := range []int{0, 7, 19} {
+		lines := renderSuggestions(many, sel, rows)
+		if len(lines) > rows {
+			t.Fatalf("selected %d produced %d lines, max %d", sel, len(lines), rows)
+		}
+		found := false
+		for _, l := range lines {
+			if strings.HasPrefix(l, "> ") && strings.Contains(l, fmt.Sprintf("dir%02d/", sel)) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("selection %d not visible in %v", sel, lines)
+		}
+		last := lines[len(lines)-1]
+		if !strings.Contains(last, fmt.Sprintf("%d of %d", sel+1, len(many))) {
+			t.Errorf("missing position line, got %q", last)
+		}
+	}
+}
+
+// Candidates are full paths, but a 72-column modal cannot show them, so the
+// list displays only the directory name.
+func TestSuggestionsShowOnlyTheDirectoryName(t *testing.T) {
+	long := "/some/very/long/path/that/would/never/fit/in/the/modal/"
+	lines := renderSuggestions([]string{long + "alpha/", long + "beta/"}, 0, 6)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %v", lines)
+	}
+	if lines[0] != "> alpha/" {
+		t.Errorf("line 0 = %q, want \"> alpha/\"", lines[0])
+	}
+	if lines[1] != "  beta/" {
+		t.Errorf("line 1 = %q, want \"  beta/\"", lines[1])
 	}
 }

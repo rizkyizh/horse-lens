@@ -125,7 +125,7 @@ A workspace is just a name and a set of links, so there is no single edit screen
 
 Movement and the mouse behave as they do on the workspace list.
 
-In a form, `↓` and `↑` complete a path field — Source path and the workspace root — stepping through the directories that match what you have typed so far and wrapping at both ends. Only directories are offered, and a path begun with `~` stays written with `~`. `^U` clears the current field, `↵` saves and `Esc` cancels. Forms with more than one field — Add and Edit project — also take `Tab` to move between them. Entries the workspace holds that are not symlinks are listed too, marked `left alone`; editing or removing those is refused.
+In a form, a path field — Source path and the workspace root — lists the directories matching what you have typed as you type. `↓` and `↑` step through them, wrapping at both ends, and fill the field with the one you land on. Only directories are offered, and a path begun with `~` stays written with `~`. `^U` clears the current field, `↵` saves and `Esc` cancels. Forms with more than one field — Add and Edit project — also take `Tab` to move between them. Entries the workspace holds that are not symlinks are listed too, marked `left alone`; editing or removing those is refused.
 
 Entering a workspace closes the interface first, then opens the shell, so you land in a normal terminal rather than one nested inside a UI.
 
